@@ -1,0 +1,18 @@
+TERMES DE REFERENCE
+Mission d'appui a la cartographie des zones agricoles vulnerables
+
+OBJECTIFS:
+Realiser une cartographie des zones agricoles a risque climatique dans la region de Bouake, en appui aux decideurs locaux. Fournir des recommandations d'adaptation.
+
+LIVRABLES:
+- Rapport cartographique (format Word et PDF)
+- Couches SIG (GeoPackage) des zones a risque
+- Presentation de restitution aux parties prenantes
+
+ECHEANCE:
+La mission doit etre realisee sur 6 semaines a compter de la signature du contrat.
+
+QUALIFICATIONS REQUISES:
+- Diplome en geomatique, geographie ou discipline connexe
+- Experience demontree en cartographie des risques climatiques
+- Maitrise de QGIS et des outils de teledetection
