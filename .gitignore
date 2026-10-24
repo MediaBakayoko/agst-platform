@@ -7,3 +7,4 @@ agents/geodata_quality/output/
 .env
 .DS_Store
 agents/field2report/output/
+agents/eudr_forest_monitoring/output/
