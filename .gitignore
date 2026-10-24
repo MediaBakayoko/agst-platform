@@ -6,3 +6,4 @@ agents/geodata_quality/output/
 *.log
 .env
 .DS_Store
+agents/field2report/output/
