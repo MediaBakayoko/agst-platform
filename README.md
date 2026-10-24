@@ -12,11 +12,16 @@ multi-client.
 
 | Agent | Rôle | Statut |
 |---|---|---|
-| [`geodata_quality`](agents/geodata_quality/) | Contrôle qualité et validation topologique des données géospatiales | 🔧 en construction |
-| `field2report` | Pipeline collecte terrain → analyse → rapport | ⏳ à venir |
-| `eudr_forest_monitoring` | Contrôle parcelles + détection changement forestier (EUDR) | ⏳ à venir |
-| `consulting_business` | Préparation offres techniques/financières, suivi de missions | ⏳ à venir |
-| `platform` (orchestrateur) | API + auth multi-client + UI (Lovable/Supabase) reliant les 4 agents | ⏳ en dernier |
+| [`geodata_quality`](agents/geodata_quality/) | Contrôle qualité et validation topologique des données géospatiales | ✅ moteur testé |
+| [`field2report`](agents/field2report/) | Pipeline collecte terrain → analyse → rapport | ✅ moteur testé |
+| [`eudr_forest_monitoring`](agents/eudr_forest_monitoring/) | Contrôle parcelles + détection changement forestier (EUDR) | ✅ moteur testé |
+| [`consulting_business`](agents/consulting_business/) | Préparation offres techniques/financières, suivi de missions | ✅ moteur testé |
+| [`platform`](platform/) (orchestrateur) | API FastAPI + isolation multi-client reliant les 4 agents | ✅ testé en conditions réelles (upload→job→isolation→téléchargement) |
+
+**Reste à faire avant un premier client réel** : connexion Supabase Auth
+réelle (squelette JWT prêt, désactivé), hébergement cloud (dev local
+pour l'instant), interface Lovable connectée à ce repo, facturation
+(non activée, architecture prévue).
 
 ## Principes communs à tous les agents
 
