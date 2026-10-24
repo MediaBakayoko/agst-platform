@@ -13,7 +13,16 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routers import consulting_business, eudr_forest_monitoring, field2report, geodata_quality, jobs
+from app.routers import (
+    academy_knowledge,
+    consulting_business,
+    data_science_geoai,
+    eudr_forest_monitoring,
+    field2report,
+    geodata_quality,
+    jobs,
+    meal_project_performance,
+)
 
 app = FastAPI(
     title="AGST Platform",
@@ -38,6 +47,9 @@ app.include_router(geodata_quality.router)
 app.include_router(field2report.router)
 app.include_router(eudr_forest_monitoring.router)
 app.include_router(consulting_business.router)
+app.include_router(meal_project_performance.router)
+app.include_router(data_science_geoai.router)
+app.include_router(academy_knowledge.router)
 app.include_router(jobs.router)
 
 

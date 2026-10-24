@@ -16,7 +16,12 @@ multi-client.
 | [`field2report`](agents/field2report/) | Pipeline collecte terrain → analyse → rapport | ✅ moteur testé |
 | [`eudr_forest_monitoring`](agents/eudr_forest_monitoring/) | Contrôle parcelles + détection changement forestier (EUDR) | ✅ moteur testé |
 | [`consulting_business`](agents/consulting_business/) | Préparation offres techniques/financières, suivi de missions | ✅ moteur testé |
-| [`platform`](platform/) (orchestrateur) | API FastAPI + isolation multi-client reliant les 4 agents | ✅ testé en conditions réelles (upload→job→isolation→téléchargement) |
+| [`meal_project_performance`](agents/meal_project_performance/) | Cadre de résultats, indicateurs, tableaux de bord de suivi-évaluation | ✅ moteur testé |
+| [`data_science_geoai`](agents/data_science_geoai/) | Statistiques, tests d'hypothèses, modèles ML/GeoAI reproductibles | ✅ moteur testé |
+| [`academy_knowledge`](agents/academy_knowledge/) | Plans de cours, exercices, validation de code pour AGST Academy | ✅ moteur testé |
+| [`platform`](platform/) (orchestrateur) | API FastAPI + isolation multi-client reliant les 7 agents | ✅ testé en conditions réelles (7/7 agents, upload→job→isolation→téléchargement) |
+
+Règles communes à tous les agents : voir [`docs/governance.md`](docs/governance.md).
 
 **Reste à faire avant un premier client réel** : connexion Supabase Auth
 réelle (squelette JWT prêt, désactivé), hébergement cloud (dev local

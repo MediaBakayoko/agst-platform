@@ -18,10 +18,10 @@ router = APIRouter(prefix="/agents/consulting-business", tags=["consulting_busin
 CONSULTING_SCRIPTS = AGENTS_ROOT / "consulting_business" / "scripts"
 
 
-def _run_script(script_name: str, agent_label: str, job_dir: Path, client_id: str, job_id: str, cli_args: list[str]):
+def _run_script(script_name: str, agent_label: str, job_dir: Path, client_id: str, job_id: str, cli_args: list[str], scripts_dir: Path = None):
     import subprocess
     import sys
-    script_path = CONSULTING_SCRIPTS / script_name
+    script_path = (scripts_dir or CONSULTING_SCRIPTS) / script_name
     result = subprocess.run([sys.executable, str(script_path), *cli_args], cwd=str(job_dir),
                              capture_output=True, text=True, timeout=600)
     import json
