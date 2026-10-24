@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+agents/geodata_quality/output/
+*.log
+.env
+.DS_Store
