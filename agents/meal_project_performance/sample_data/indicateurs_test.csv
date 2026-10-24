@@ -1,0 +1,4 @@
+code_indicateur,intitule,type,formule,source_donnees,frequence_collecte,responsable,cible,unite
+IND001,Nombre de producteurs formes,extrant,Comptage direct des participants,Listes de presence formation,trimestrielle,Charge de projet,500,producteurs
+IND002,Taux d'adoption des pratiques recommandees,resultat,Nb producteurs appliquant / Nb producteurs formes,Enquete de suivi,semestrielle,Specialiste MEAL,80,pourcent
+IND003,Rendement moyen cacao,resultat,Moyenne des rendements declares,Enquete agricole,annuelle,,2.5,tonnes/ha
