@@ -35,10 +35,15 @@ from openpyxl.utils import get_column_letter
 logger = logging.getLogger("survey_intelligence.indicator_matrix_builder")
 
 MATRIX_COLUMNS = [
-    "intitule", "definition", "formule", "unite", "source_verification",
-    "frequence", "desagregation", "cible", "question_necessaire", "regle_qualite",
+    "objectif", "resultat_associe", "intitule", "type_indicateur", "definition",
+    "formule", "numerateur", "denominateur", "unite", "valeur_reference", "cible",
+    "source_verification", "methode_collecte", "frequence", "desagregation",
+    "question_necessaire", "regle_qualite", "limites_methodologiques", "statut_validation",
 ]
 REQUIRED_FOR_DEPLOY = ["intitule", "definition", "formule", "source_verification", "frequence"]
+TYPES_INDICATEUR_VALIDES = {"realisation", "resultat", "impact"}
+STATUTS_VALIDATION_VALIDES = {"propose", "approuve", "rejete"}
+DEFAULT_STATUT_VALIDATION = "propose"
 
 
 def build_matrix(indicators_df: pd.DataFrame) -> tuple[pd.DataFrame, list[dict]]:
@@ -52,14 +57,29 @@ def build_matrix(indicators_df: pd.DataFrame) -> tuple[pd.DataFrame, list[dict]]
         df[c] = None
     df = df[MATRIX_COLUMNS]
 
+    # statut_validation : valeur fournie si reconnue, sinon "propose"
+    # par defaut (jamais "approuve" invente).
+    def _normalize_statut(v):
+        v_str = str(v).strip().lower() if not pd.isna(v) else ""
+        return v_str if v_str in STATUTS_VALIDATION_VALIDES else DEFAULT_STATUT_VALIDATION
+    df["statut_validation"] = df["statut_validation"].apply(_normalize_statut)
+
     gaps = []
+    type_warnings = []
     for idx, row in df.iterrows():
         a_completer = [c for c in REQUIRED_FOR_DEPLOY if pd.isna(row[c]) or str(row[c]).strip() == ""]
         if a_completer:
             gaps.append({"indicateur": row.get("intitule", f"ligne_{idx}"), "champs_manquants": a_completer})
         if pd.isna(row["cible"]) or str(row["cible"]).strip() == "":
             gaps.append({"indicateur": row.get("intitule", f"ligne_{idx}"), "champs_manquants": ["cible (non fournie -- arbitrage utilisateur requis)"]})
-    return df, gaps
+        if pd.isna(row["valeur_reference"]) or str(row["valeur_reference"]).strip() == "":
+            gaps.append({"indicateur": row.get("intitule", f"ligne_{idx}"), "champs_manquants": ["valeur_reference (non fournie -- jamais devinee)"]})
+        type_ind = str(row["type_indicateur"]).strip().lower() if not pd.isna(row["type_indicateur"]) else ""
+        if type_ind and type_ind not in TYPES_INDICATEUR_VALIDES:
+            type_warnings.append(f"Indicateur '{row.get('intitule')}' : type_indicateur '{type_ind}' non reconnu (attendu: realisation/resultat/impact) -- a corriger")
+        elif not type_ind:
+            gaps.append({"indicateur": row.get("intitule", f"ligne_{idx}"), "champs_manquants": ["type_indicateur (realisation/resultat/impact non precise)"]})
+    return df, gaps, type_warnings
 
 
 def write_matrix_excel(df: pd.DataFrame, gaps: list[dict], project_elements: dict, output_path: Path) -> None:
@@ -134,17 +154,22 @@ def main() -> int:
     logger.info("Chargement : projet (%d element(s) detecte(s)), %d indicateur(s)",
                 sum(1 for v in project["elements"].values() if v), len(indicators_df))
 
-    matrix_df, gaps = build_matrix(indicators_df)
+    matrix_df, gaps, type_warnings = build_matrix(indicators_df)
     for g in gaps:
         logger.warning("Indicateur '%s' : champs manquants %s", g["indicateur"], g["champs_manquants"])
+    for w in type_warnings:
+        logger.warning(w)
 
     excel_path = run_dir / "matrice_indicateurs.xlsx"
     write_matrix_excel(matrix_df, gaps, project["elements"], excel_path)
 
-    logger.info("Matrice ecrite : %s (%d indicateur(s), %d lacune(s) signalee(s))", excel_path, len(matrix_df), len(gaps))
+    logger.info("Matrice ecrite : %s (%d indicateur(s), %d lacune(s) signalee(s), %d avertissement(s) de type)",
+                excel_path, len(matrix_df), len(gaps), len(type_warnings))
     print(f"OK - matrice: {excel_path}")
     if gaps:
         print(f"ATTENTION : {len(gaps)} lacune(s) a arbitrer avant approbation -- voir feuille 'A completer'")
+    if type_warnings:
+        print(f"ATTENTION : {len(type_warnings)} type(s) d'indicateur non reconnu(s)")
     return 0
 
 

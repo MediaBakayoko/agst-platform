@@ -31,17 +31,46 @@ def test_matrix_never_invents_missing_target():
     df = pd.DataFrame([{"intitule": "Indicateur test", "definition": "def", "formule": "f",
                          "unite": "u", "source_verification": "sv", "frequence": "freq",
                          "cible": None}])
-    matrix_df, gaps = build_matrix(df)
+    matrix_df, gaps, _ = build_matrix(df)
     assert pd.isna(matrix_df.iloc[0]["cible"])
     assert any("cible" in str(g["champs_manquants"]) for g in gaps)
+
+
+def test_matrix_never_invents_baseline():
+    """Aucune valeur de reference absente ne doit etre inventee."""
+    df = pd.DataFrame([{"intitule": "Indicateur test", "definition": "def", "formule": "f",
+                         "source_verification": "sv", "frequence": "freq", "cible": "100",
+                         "valeur_reference": None}])
+    matrix_df, gaps, _ = build_matrix(df)
+    assert pd.isna(matrix_df.iloc[0]["valeur_reference"])
+    assert any("valeur_reference" in str(g["champs_manquants"]) for g in gaps)
 
 
 def test_matrix_signals_missing_required_field():
     df = pd.DataFrame([{"intitule": "Indicateur incomplet", "definition": None, "formule": "f",
                          "source_verification": "sv", "frequence": "freq", "cible": "100"}])
-    matrix_df, gaps = build_matrix(df)
+    matrix_df, gaps, _ = build_matrix(df)
     gap_for_this = next(g for g in gaps if g["indicateur"] == "Indicateur incomplet")
     assert "definition" in gap_for_this["champs_manquants"]
+
+
+def test_matrix_preserves_explicit_approved_status():
+    """Un statut_validation explicitement fourni et reconnu (ex:
+    'approuve') ne doit jamais etre ecrase par le defaut.
+    """
+    df = pd.DataFrame([{"intitule": "Ind1", "definition": "d", "formule": "f",
+                         "source_verification": "sv", "frequence": "freq", "cible": "10",
+                         "valeur_reference": "0", "statut_validation": "approuve"}])
+    matrix_df, _, _ = build_matrix(df)
+    assert matrix_df.iloc[0]["statut_validation"] == "approuve"
+
+
+def test_matrix_unrecognized_status_falls_back_to_propose():
+    df = pd.DataFrame([{"intitule": "Ind1", "definition": "d", "formule": "f",
+                         "source_verification": "sv", "frequence": "freq", "cible": "10",
+                         "valeur_reference": "0", "statut_validation": "n_importe_quoi"}])
+    matrix_df, _, _ = build_matrix(df)
+    assert matrix_df.iloc[0]["statut_validation"] == "propose"
 
 
 def test_question_spec_parsing_select_one():
@@ -72,6 +101,41 @@ def test_xlsform_builder_handles_duplicate_names():
     names = [r["name"] for r in survey_rows if r["name"] not in ("start", "end")]
     assert len(names) == len(set(names)), "les noms de champs doivent etre uniques"
     assert any("deja utilise" in w for w in warnings)
+
+
+def test_xlsform_builder_parses_relevant_and_constraint():
+    parsed = parse_question_spec(
+        "decimal:Surface|relevant=${a_une_parcelle}='oui'|constraint=. > 0|constraint_message=Doit etre positif",
+        "fallback",
+    )
+    assert parsed["type"] == "decimal"
+    assert parsed["relevant"] == "${a_une_parcelle}='oui'"
+    assert parsed["constraint"] == ". > 0"
+    assert parsed["constraint_message"] == "Doit etre positif"
+
+
+def test_xlsform_builder_handles_repeat_group():
+    df = pd.DataFrame([
+        {"intitule": "Annee", "question_necessaire": "integer:Annee|repeat_group=historique"},
+        {"intitule": "Quantite", "question_necessaire": "decimal:Quantite|repeat_group=historique"},
+        {"intitule": "Commentaire", "question_necessaire": "text:Commentaire"},
+    ])
+    survey_rows, _, _, _ = build_xlsform(df, "Test repeat")
+    types = [r["type"] for r in survey_rows]
+    assert "begin repeat" in types
+    assert "end repeat" in types
+    begin_idx = types.index("begin repeat")
+    end_idx = types.index("end repeat")
+    assert begin_idx < end_idx
+    # "Commentaire" (hors groupe) doit etre apres la fermeture du groupe
+    commentaire_idx = next(i for i, r in enumerate(survey_rows) if r["name"] == "commentaire")
+    assert commentaire_idx > end_idx
+
+
+def test_xlsform_builder_calculate_field_without_expr_warns():
+    df = pd.DataFrame([{"intitule": "Champ calcule", "question_necessaire": "calculate:Champ calcule"}])
+    _, _, _, warnings = build_xlsform(df, "Test calc")
+    assert any("sans expression" in w for w in warnings)
 
 
 def test_xlsform_validator_detects_missing_choice_list(tmp_path):
@@ -116,6 +180,57 @@ def test_xlsform_validator_accepts_well_formed_form(tmp_path):
     result = validate_xlsform(path)
     assert result["valide"] is True
     assert result["erreurs_bloquantes"] == []
+
+
+def test_xlsform_validator_detects_relevant_referencing_unknown_field(tmp_path):
+    """Une expression relevant qui reference un champ absent du
+    formulaire doit etre une erreur bloquante -- detectee par les
+    controles maison meme si pyxform est indisponible dans
+    l'environnement de test.
+    """
+    import openpyxl
+    path = tmp_path / "relevant_invalide.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "survey"
+    ws.append(["type", "name", "label", "required", "relevant"])
+    ws.append(["start", "start", "", "", ""])
+    ws.append(["text", "q1", "Question 1", "yes", ""])
+    ws.append(["text", "q2", "Question 2", "yes", "${champ_inexistant}='x'"])
+    ws.append(["end", "end", "", "", ""])
+    ws2 = wb.create_sheet("choices")
+    ws2.append(["list_name", "name", "label"])
+    ws3 = wb.create_sheet("settings")
+    ws3.append(["form_title", "form_id"])
+    ws3.append(["Titre", "id"])
+    wb.save(path)
+
+    result = validate_xlsform(path)
+    assert result["valide"] is False
+    assert any("champ_inexistant" in e for e in result["erreurs_bloquantes"])
+
+
+def test_xlsform_validator_detects_unclosed_repeat_group(tmp_path):
+    import openpyxl
+    path = tmp_path / "repeat_non_ferme.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "survey"
+    ws.append(["type", "name", "label", "required"])
+    ws.append(["start", "start", "", ""])
+    ws.append(["begin repeat", "groupe1", "Groupe 1", ""])
+    ws.append(["text", "q1", "Question 1", "yes"])
+    ws.append(["end", "end", "", ""])  # pas de "end repeat" -- erreur attendue
+    ws2 = wb.create_sheet("choices")
+    ws2.append(["list_name", "name", "label"])
+    ws3 = wb.create_sheet("settings")
+    ws3.append(["form_title", "form_id"])
+    ws3.append(["Titre", "id"])
+    wb.save(path)
+
+    result = validate_xlsform(path)
+    assert result["valide"] is False
+    assert any("non ferme" in e.lower() for e in result["erreurs_bloquantes"])
 
 
 def test_outlier_detection_never_labeled_as_error():
