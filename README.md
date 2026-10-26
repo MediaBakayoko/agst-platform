@@ -38,12 +38,13 @@ pour l'instant), interface Lovable connectée à ce repo, facturation
 2. Token API v2 : *Account Settings → API Token*.
 3. URL de base de l'API (`https://kf.kobotoolbox.org/api/v2/` ou
    équivalent pour un serveur privé).
-4. Une fois obtenus : implémenter les méthodes de
-   `agents/survey_intelligence/scripts/kobo_connector_stub.py`
-   (actuellement toutes lèvent `NotImplementedError`) et stocker le
-   token côté serveur uniquement (jamais dans un prompt/log), en
-   suivant le pattern déjà en place dans
-   `platform/app/core/auth.py` (variable d'environnement, jamais en dur).
+4. Une fois obtenus : utiliser `kobo_connector.py`
+   (`KoboConnector`, `KoboCredentials`) -- implementation reelle,
+   testee contre un serveur HTTP mock (voir
+   `tests/test_kobo_connector.py`), jamais testee contre un vrai
+   serveur Kobo. Stocker le token cote serveur uniquement, en suivant
+   le pattern deja en place dans `platform/app/core/auth.py`
+   (variable d'environnement, jamais en dur).
 
 ### Supabase (pour la plateforme)
 1. Créer un projet sur [supabase.com](https://supabase.com).

@@ -1,6 +1,8 @@
 """Routes Survey Intelligence : conception/validation d'enquete,
 contrôle qualite de soumissions. Aucun deploiement Kobo reel dans
-cette phase (voir kobo_connector_stub.py et README).
+cette phase (voir kobo_connector.py et README -- connecteur HTTP
+implemente mais jamais teste contre un vrai serveur Kobo, faute de
+credentials).
 """
 from __future__ import annotations
 
