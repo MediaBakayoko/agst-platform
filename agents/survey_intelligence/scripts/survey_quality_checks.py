@@ -28,6 +28,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
 from datetime import datetime
@@ -61,10 +62,14 @@ SEVERITY_MAP = {
     "reponse_manquante": "erreur_bloquante",
     "champ_obligatoire_absent": "erreur_bloquante",
     "coordonnees_gps_invalides": "erreur_bloquante",
+    "coordonnees_gps_hors_zone": "erreur_bloquante",
+    "date_incoherente": "erreur_bloquante",
     "doublon_repondant": "anomalie_probable",
     "coordonnees_gps_suspectes_zero": "anomalie_probable",
-    "valeur_aberrante_iqr": "valeur_inhabituelle",
     "incoherence_inter_questions": "anomalie_probable",
+    "duree_entretien_suspecte": "anomalie_probable",
+    "soumission_modifiee_apres_analyse": "anomalie_probable",
+    "valeur_aberrante_iqr": "valeur_inhabituelle",
 }
 
 ACTION_RECOMMANDEE = {
@@ -72,6 +77,130 @@ ACTION_RECOMMANDEE = {
     "anomalie_probable": "Verifier auprès de l'enqueteur ou du repondant ; revisite de terrain si non resolu",
     "valeur_inhabituelle": "Examiner la valeur en contexte -- ne pas rejeter automatiquement",
 }
+
+# Statuts de resolution possibles pour une alerte (registre).
+STATUTS_RESOLUTION = ["nouvelle", "a_verifier", "correction_demandee", "corrigee", "cloturee", "faux_positif"]
+DEFAULT_STATUT_RESOLUTION = "nouvelle"
+
+
+def check_date_consistency(df: pd.DataFrame, date_fields: list[str], min_date: str | None = None, max_date: str | None = None) -> list[dict]:
+    """Verifie que les dates sont parseables et dans une plage plausible
+    (bornes fournies explicitement -- jamais devinees). Une date non
+    parseable ou hors bornes est une erreur bloquante (une date fausse
+    corrompt directement le calcul des indicateurs temporels).
+    """
+    anomalies = []
+    min_dt = pd.to_datetime(min_date) if min_date else None
+    max_dt = pd.to_datetime(max_date) if max_date else None
+    for fld in date_fields:
+        if fld not in df.columns:
+            continue
+        parsed = pd.to_datetime(df[fld], errors="coerce")
+        unparseable = df[fld].notna() & parsed.isna()
+        for idx in df[unparseable].index:
+            anomalies.append({
+                "type_anomalie": "date_incoherente", "ligne": idx, "champ": fld,
+                "description": f"Valeur '{df.loc[idx, fld]}' dans '{fld}' n'est pas une date valide",
+            })
+        if min_dt is not None:
+            before = parsed.notna() & (parsed < min_dt)
+            for idx in df[before].index:
+                anomalies.append({
+                    "type_anomalie": "date_incoherente", "ligne": idx, "champ": fld,
+                    "description": f"Date '{parsed.loc[idx]}' dans '{fld}' anterieure au debut du projet ({min_date})",
+                })
+        if max_dt is not None:
+            after = parsed.notna() & (parsed > max_dt)
+            for idx in df[after].index:
+                anomalies.append({
+                    "type_anomalie": "date_incoherente", "ligne": idx, "champ": fld,
+                    "description": f"Date '{parsed.loc[idx]}' dans '{fld}' posterieure a la fin du projet ({max_date})",
+                })
+    return anomalies
+
+
+def check_gps_within_zone(df: pd.DataFrame, lat_field: str, lon_field: str,
+                           lat_min: float, lat_max: float, lon_min: float, lon_max: float) -> list[dict]:
+    """Verifie que les coordonnees GPS sont a l'interieur d'une zone
+    rectangulaire fournie explicitement (bornes de la zone du projet,
+    jamais devinees). Hors zone = erreur bloquante (soumission
+    probablement hors perimetre du projet ou erreur de saisie GPS).
+    """
+    anomalies = []
+    if lat_field not in df.columns or lon_field not in df.columns:
+        return anomalies
+    lat = pd.to_numeric(df[lat_field], errors="coerce")
+    lon = pd.to_numeric(df[lon_field], errors="coerce")
+    valid = lat.notna() & lon.notna()
+    hors_zone = valid & ((lat < lat_min) | (lat > lat_max) | (lon < lon_min) | (lon > lon_max))
+    for idx in df[hors_zone].index:
+        anomalies.append({
+            "type_anomalie": "coordonnees_gps_hors_zone", "ligne": idx, "champ": f"{lat_field}/{lon_field}",
+            "description": f"Coordonnees ({lat.loc[idx]}, {lon.loc[idx]}) hors de la zone du projet "
+                            f"[lat {lat_min}..{lat_max}, lon {lon_min}..{lon_max}]",
+        })
+    return anomalies
+
+
+def check_interview_duration(df: pd.DataFrame, start_field: str, end_field: str,
+                              min_minutes: float = 2.0, max_minutes: float = 180.0) -> list[dict]:
+    """Detecte une duree d'entretien anormalement courte (saisie bâclée
+    probable) ou longue (bornes par defaut larges, ajustables). Classee
+    anomalie_probable, jamais erreur certaine -- une duree atypique
+    peut avoir une explication legitime.
+    """
+    anomalies = []
+    if start_field not in df.columns or end_field not in df.columns:
+        return anomalies
+    start = pd.to_datetime(df[start_field], errors="coerce")
+    end = pd.to_datetime(df[end_field], errors="coerce")
+    valid = start.notna() & end.notna()
+    duration_min = (end - start).dt.total_seconds() / 60.0
+    suspect = valid & ((duration_min < min_minutes) | (duration_min > max_minutes))
+    for idx in df[suspect].index:
+        anomalies.append({
+            "type_anomalie": "duree_entretien_suspecte", "ligne": idx, "champ": f"{start_field}/{end_field}",
+            "description": f"Duree d'entretien de {duration_min.loc[idx]:.1f} min, hors plage attendue "
+                            f"[{min_minutes}, {max_minutes}] min -- a verifier, pas necessairement fausse",
+        })
+    return anomalies
+
+
+def check_modified_after_analysis(df: pd.DataFrame, id_field: str, previous_hashes_path: Path) -> tuple[list[dict], dict]:
+    """Detecte les soumissions dont le contenu a change depuis la
+    derniere analyse (hash de la ligne complete), pour signaler une
+    modification posterieure plutot que de la traiter silencieusement
+    comme une nouvelle soumission normale.
+
+    Renvoie (anomalies, nouveaux_hashes) -- nouveaux_hashes doit etre
+    persiste par l'appelant pour la prochaine execution (fichier JSON
+    simple ici ; en production ce serait une table Supabase).
+    """
+    import hashlib
+
+    anomalies = []
+    previous_hashes = {}
+    if previous_hashes_path.exists():
+        try:
+            previous_hashes = json.loads(previous_hashes_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            logger.warning("Fichier de hash precedent illisible (%s) -- traite comme absent", exc)
+
+    new_hashes = {}
+    if id_field not in df.columns:
+        return anomalies, new_hashes
+
+    for idx, row in df.iterrows():
+        submission_id = str(row[id_field])
+        row_hash = hashlib.sha256(row.to_json().encode("utf-8")).hexdigest()
+        new_hashes[submission_id] = row_hash
+        if submission_id in previous_hashes and previous_hashes[submission_id] != row_hash:
+            anomalies.append({
+                "type_anomalie": "soumission_modifiee_apres_analyse", "ligne": idx, "champ": id_field,
+                "description": f"Soumission '{submission_id}' modifiee depuis la derniere analyse "
+                               f"(hash different) -- re-verifier les controles qualite deja effectues",
+            })
+    return anomalies, new_hashes
 
 
 def check_outliers_iqr(df: pd.DataFrame, numeric_fields: list[str]) -> list[dict]:
@@ -120,22 +249,32 @@ def check_consistency_rules(df: pd.DataFrame, rules_df: pd.DataFrame) -> list[di
     return anomalies
 
 
-def build_alert_registry(anomalies: list[dict], project_id: str) -> pd.DataFrame:
+def build_alert_registry(anomalies: list[dict], project_id: str, field_to_indicator: dict | None = None) -> pd.DataFrame:
+    """Construit le registre d'alertes. field_to_indicator (optionnel)
+    mappe un nom de champ au nom de l'indicateur qu'il alimente --
+    permet de renseigner 'indicateur_affecte' sans deviner (champ
+    absent du mapping -> 'non determine', jamais invente).
+    """
+    field_to_indicator = field_to_indicator or {}
     rows = []
     for a in anomalies:
         severite = SEVERITY_MAP.get(a["type_anomalie"], "anomalie_probable")
+        champ = a.get("champ", "")
+        champ_principal = champ.split("/")[0] if champ else ""
+        indicateur_affecte = field_to_indicator.get(champ_principal, "non_determine")
         rows.append({
             "projet": project_id,
             "id_soumission": a.get("ligne"),
             "date_detection": datetime.now().strftime("%Y-%m-%d"),
             "enqueteur": a.get("enqueteur", "non_identifie"),
             "regle_declenchee": a["type_anomalie"],
-            "valeur_concernee": a.get("champ", ""),
+            "valeur_concernee": champ,
             "niveau_gravite": severite,
             "justification": a["description"],
+            "indicateur_potentiellement_affecte": indicateur_affecte,
             "action_recommandee": ACTION_RECOMMANDEE.get(severite, "A examiner"),
             "responsable_verification": "superviseur_a_assigner",
-            "statut": "ouverte",
+            "statut_resolution": DEFAULT_STATUT_RESOLUTION,
             "historique_corrections": "",
         })
     return pd.DataFrame(rows)
@@ -183,6 +322,14 @@ def main() -> int:
     ap.add_argument("--gps-fields", default="", help="2 champs separes par une virgule : lat,lon")
     ap.add_argument("--dedup-key-fields", default="")
     ap.add_argument("--consistency-rules", default=None, help="CSV de regles champ_a,operateur,champ_b")
+    ap.add_argument("--date-fields", default="", help="Champs date a verifier (parseables + plage)")
+    ap.add_argument("--project-start-date", default=None, help="Bornes de plausibilite des dates (AAAA-MM-JJ)")
+    ap.add_argument("--project-end-date", default=None)
+    ap.add_argument("--zone-bbox", default=None, help="lat_min,lat_max,lon_min,lon_max de la zone du projet")
+    ap.add_argument("--interview-start-field", default=None)
+    ap.add_argument("--interview-end-field", default=None)
+    ap.add_argument("--submission-id-field", default=None, help="Champ id unique pour detecter les modifications apres analyse (idempotence)")
+    ap.add_argument("--previous-hashes-file", default=None, help="Fichier JSON de hash de la synchro precedente (cree si absent)")
     ap.add_argument("--output-dir", default="output")
     args = ap.parse_args()
 
@@ -207,6 +354,7 @@ def main() -> int:
     numeric_fields = _parse_list(args.numeric_fields)
     gps_fields = _parse_list(args.gps_fields)
     dedup_fields = _parse_list(args.dedup_key_fields)
+    date_fields = _parse_list(args.date_fields)
 
     anomalies: list[dict] = []
     anomalies += check_missing_required(df, required_fields)
@@ -216,6 +364,19 @@ def main() -> int:
         anomalies += check_gps_validity(df, gps_fields[0], gps_fields[1])
     anomalies += check_outliers_iqr(df, numeric_fields)
 
+    if date_fields:
+        anomalies += check_date_consistency(df, date_fields, args.project_start_date, args.project_end_date)
+
+    if args.zone_bbox and len(gps_fields) == 2:
+        try:
+            lat_min, lat_max, lon_min, lon_max = (float(x) for x in args.zone_bbox.split(","))
+            anomalies += check_gps_within_zone(df, gps_fields[0], gps_fields[1], lat_min, lat_max, lon_min, lon_max)
+        except ValueError:
+            logger.warning("--zone-bbox mal forme (attendu lat_min,lat_max,lon_min,lon_max) -- ignore : %s", args.zone_bbox)
+
+    if args.interview_start_field and args.interview_end_field:
+        anomalies += check_interview_duration(df, args.interview_start_field, args.interview_end_field)
+
     if args.consistency_rules:
         rules_path = Path(args.consistency_rules)
         if rules_path.exists():
@@ -223,6 +384,14 @@ def main() -> int:
             anomalies += check_consistency_rules(df, rules_df)
         else:
             logger.warning("Fichier de regles de coherence introuvable : %s -- regles ignorees", rules_path)
+
+    if args.submission_id_field and args.previous_hashes_file:
+        hashes_path = Path(args.previous_hashes_file)
+        modif_anomalies, new_hashes = check_modified_after_analysis(df, args.submission_id_field, hashes_path)
+        anomalies += modif_anomalies
+        hashes_path.parent.mkdir(parents=True, exist_ok=True)
+        hashes_path.write_text(json.dumps(new_hashes, ensure_ascii=False, indent=2), encoding="utf-8")
+        logger.info("Hash de synchronisation mis a jour : %s (%d soumission(s))", hashes_path, len(new_hashes))
 
     for a in anomalies:
         sev = SEVERITY_MAP.get(a["type_anomalie"], "anomalie_probable")

@@ -258,11 +258,54 @@ def test_alert_registry_has_all_required_columns():
     registry = build_alert_registry(anomalies, "projet_test")
     required_cols = {
         "projet", "id_soumission", "date_detection", "enqueteur", "regle_declenchee",
-        "valeur_concernee", "niveau_gravite", "justification", "action_recommandee",
-        "responsable_verification", "statut", "historique_corrections",
+        "valeur_concernee", "niveau_gravite", "justification", "indicateur_potentiellement_affecte",
+        "action_recommandee", "responsable_verification", "statut_resolution", "historique_corrections",
     }
     assert required_cols.issubset(set(registry.columns))
     assert registry.iloc[0]["niveau_gravite"] == "erreur_bloquante"
+    assert registry.iloc[0]["statut_resolution"] == "nouvelle"
+
+
+def test_date_consistency_detects_unparseable_and_out_of_range():
+    from survey_quality_checks import check_date_consistency
+    df = pd.DataFrame({"date_visite": ["2026-01-15", "pas_une_date", "2030-01-01"]})
+    anomalies = check_date_consistency(df, ["date_visite"], min_date="2025-01-01", max_date="2026-12-31")
+    types_lignes = {(a["ligne"]) for a in anomalies}
+    assert 1 in types_lignes  # non parseable
+    assert 2 in types_lignes  # hors bornes (futur)
+
+
+def test_gps_within_zone_flags_outside_bbox():
+    from survey_quality_checks import check_gps_within_zone
+    df = pd.DataFrame({"lat": [4.75, 10.5], "lon": [-6.6, -6.6]})
+    anomalies = check_gps_within_zone(df, "lat", "lon", lat_min=4.0, lat_max=5.5, lon_min=-7.0, lon_max=-6.0)
+    assert len(anomalies) == 1
+    assert anomalies[0]["ligne"] == 1
+
+
+def test_interview_duration_flags_too_short():
+    from survey_quality_checks import check_interview_duration
+    df = pd.DataFrame({
+        "debut": ["2026-01-01T10:00:00", "2026-01-01T10:00:00"],
+        "fin": ["2026-01-01T10:00:30", "2026-01-01T10:20:00"],
+    })
+    anomalies = check_interview_duration(df, "debut", "fin", min_minutes=2.0, max_minutes=180.0)
+    assert len(anomalies) == 1
+    assert anomalies[0]["ligne"] == 0
+    assert SEVERITY_MAP[anomalies[0]["type_anomalie"]] == "anomalie_probable"
+
+
+def test_modified_after_analysis_detects_change(tmp_path):
+    from survey_quality_checks import check_modified_after_analysis
+    hashes_path = tmp_path / "hashes.json"
+    df1 = pd.DataFrame({"id": ["s1", "s2"], "valeur": [10, 20]})
+    _, hashes1 = check_modified_after_analysis(df1, "id", hashes_path)
+    hashes_path.write_text(__import__("json").dumps(hashes1), encoding="utf-8")
+
+    df2 = pd.DataFrame({"id": ["s1", "s2"], "valeur": [10, 999]})  # s2 modifie
+    anomalies2, _ = check_modified_after_analysis(df2, "id", hashes_path)
+    assert len(anomalies2) == 1
+    assert anomalies2[0]["description"].find("s2") != -1
 
 
 if __name__ == "__main__":
