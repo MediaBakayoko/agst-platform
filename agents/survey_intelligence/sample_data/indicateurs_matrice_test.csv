@@ -1,0 +1,8 @@
+intitule,definition,formule,unite,source_verification,frequence,desagregation,cible,question_necessaire,regle_qualite
+Nom du producteur,Identite du repondant,Saisie directe,texte,Enquete terrain,unique,Aucune,,text:Nom complet du producteur,Champ obligatoire
+Sexe du producteur,Sexe declare,Saisie directe,categorie,Enquete terrain,unique,Sexe,,"select_one:Sexe du producteur:Masculin,Feminin",Champ obligatoire
+Age du producteur,Age en annees,Saisie directe,annees,Enquete terrain,unique,Age,,integer:Age du producteur,Doit etre entre 18 et 100
+Taux d'adoption des pratiques agroforestieres,Part des producteurs appliquant au moins 2 pratiques recommandees,Nb producteurs appliquant / Nb producteurs formes * 100,pourcent,Enquete de suivi trimestrielle,trimestrielle,Cooperative;Sexe,,"select_multiple:Pratiques agroforestieres appliquees:Ombrage,Paillage,Compostage,Taille phytosanitaire","Verifier coherence avec formation suivie"
+Rendement moyen par hectare,Rendement cacao declare par producteur,Production totale / surface exploitee,kg/ha,Enquete de suivi trimestrielle,trimestrielle,Cooperative,,decimal:Rendement declare (kg/ha),Valeur entre 0 et 3000
+Surface exploitee,Surface de la parcelle de cacao,Declaration producteur,ha,Enquete de suivi trimestrielle,trimestrielle,Cooperative,,decimal:Surface exploitee (ha),Doit etre superieure a 0
+Localisation de la parcelle,Coordonnees GPS de la parcelle,Releve GPS,degres,Enquete de suivi trimestrielle,trimestrielle,Cooperative,,geopoint:Localisation GPS de la parcelle,Doit etre dans la zone du projet

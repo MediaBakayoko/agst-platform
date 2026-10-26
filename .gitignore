@@ -13,3 +13,5 @@ platform/storage/
 agents/meal_project_performance/output/
 agents/data_science_geoai/output/
 agents/academy_knowledge/output/
+agents/survey_intelligence/output/
+agents/survey_intelligence/.pytest_cache/

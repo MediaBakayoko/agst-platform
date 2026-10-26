@@ -22,6 +22,7 @@ from app.routers import (
     geodata_quality,
     jobs,
     meal_project_performance,
+    survey_intelligence,
 )
 
 app = FastAPI(
@@ -50,6 +51,7 @@ app.include_router(consulting_business.router)
 app.include_router(meal_project_performance.router)
 app.include_router(data_science_geoai.router)
 app.include_router(academy_knowledge.router)
+app.include_router(survey_intelligence.router)
 app.include_router(jobs.router)
 
 
