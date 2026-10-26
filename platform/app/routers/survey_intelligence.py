@@ -8,7 +8,8 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Form, UploadFile
+from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
+from pydantic import BaseModel
 
 from app.core.auth import ClientIdentity, get_current_client
 from app.core.job_runner import AGENTS_ROOT
@@ -97,3 +98,70 @@ async def quality_check(
     meta = _run_script("survey_quality_checks.py", "survey_intelligence.survey_quality_checks", job_dir, client.client_id, job_id, cli_args, scripts_dir=SI_SCRIPTS)
     return JobCreatedResponse(job_id=job_id, agent="survey_intelligence.survey_quality_checks", statut=meta["statut"],
                                message="Registre d'alertes genere, voir /jobs/{job_id}.")
+
+
+class AlertUpdateRequest(BaseModel):
+    nouveau_statut: str
+    commentaire: Optional[str] = None
+
+
+ALLOWED_ALERT_STATUSES = {"nouvelle", "a_verifier", "correction_demandee", "corrigee", "cloturee", "faux_positif"}
+
+
+@router.patch("/alertes/{job_id}/{id_soumission}")
+async def update_alert_status(
+    job_id: str, id_soumission: str, body: AlertUpdateRequest,
+    client: ClientIdentity = Depends(get_current_client),
+):
+    """Permet a un superviseur de faire evoluer le statut d'une alerte
+    du registre genere par un quality-check, avec historique conserve
+    (jamais de perte de l'etat precedent). Ne modifie JAMAIS la
+    soumission source -- uniquement le registre d'alertes derive.
+    """
+    import pandas as pd
+    from app.core.storage import job_dir_for
+
+    if body.nouveau_statut not in ALLOWED_ALERT_STATUSES:
+        raise HTTPException(400, f"Statut invalide : {body.nouveau_statut}. Valeurs autorisees : {sorted(ALLOWED_ALERT_STATUSES)}")
+
+    try:
+        job_dir = job_dir_for(client.client_id, job_id)
+    except FileNotFoundError:
+        raise HTTPException(404, "Job introuvable pour ce client")
+
+    # survey_quality_checks.py ecrit dans un sous-dossier horodate
+    # (quality_<nom>_<timestamp>/) plutot qu'a la racine du job --
+    # on cherche le registre_alertes.csv quel que soit ce sous-dossier.
+    matches = list(job_dir.glob("**/registre_alertes.csv"))
+    if not matches:
+        raise HTTPException(404, "Registre d'alertes introuvable pour ce job")
+    csv_path = matches[0]
+
+    df = pd.read_csv(csv_path)
+    mask = df["id_soumission"].astype(str) == str(id_soumission)
+    if not mask.any():
+        raise HTTPException(404, f"Aucune alerte trouvee pour id_soumission={id_soumission} dans ce job")
+
+    import json as _json
+    from datetime import datetime, timezone
+
+    for idx in df[mask].index:
+        historique_brut = df.at[idx, "historique_corrections"]
+        historique = []
+        if isinstance(historique_brut, str) and historique_brut.strip():
+            try:
+                historique = _json.loads(historique_brut)
+            except Exception:
+                historique = [{"ancien_contenu_non_structure": historique_brut}]
+        historique.append({
+            "horodatage": datetime.now(timezone.utc).isoformat(),
+            "ancien_statut": df.at[idx, "statut_resolution"],
+            "nouveau_statut": body.nouveau_statut,
+            "commentaire": body.commentaire,
+            "modifie_par": client.client_id,
+        })
+        df.at[idx, "statut_resolution"] = body.nouveau_statut
+        df.at[idx, "historique_corrections"] = _json.dumps(historique, ensure_ascii=False)
+
+    df.to_csv(csv_path, index=False)
+    return {"statut": "mis_a_jour", "job_id": job_id, "id_soumission": id_soumission, "nouveau_statut": body.nouveau_statut}
