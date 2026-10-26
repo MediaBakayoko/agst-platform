@@ -138,6 +138,11 @@ async def update_alert_status(
     csv_path = matches[0]
 
     df = pd.read_csv(csv_path)
+    # object dtype explicite pour historique_corrections : c'est une
+    # colonne texte JSON, jamais numerique -- evite le FutureWarning
+    # pandas et le downcast errone si la colonne est entierement vide
+    # au depart (NaN -> float64 par defaut).
+    df["historique_corrections"] = df["historique_corrections"].astype(object)
     mask = df["id_soumission"].astype(str) == str(id_soumission)
     if not mask.any():
         raise HTTPException(404, f"Aucune alerte trouvee pour id_soumission={id_soumission} dans ce job")
