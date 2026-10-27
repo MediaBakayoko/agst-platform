@@ -21,18 +21,39 @@ CONSULTING_SCRIPTS = AGENTS_ROOT / "consulting_business" / "scripts"
 def _run_script(script_name: str, agent_label: str, job_dir: Path, client_id: str, job_id: str, cli_args: list[str], scripts_dir: Path = None):
     import subprocess
     import sys
+    import time
     script_path = (scripts_dir or CONSULTING_SCRIPTS) / script_name
+    start = time.time()
     result = subprocess.run([sys.executable, str(script_path), *cli_args], cwd=str(job_dir),
                              capture_output=True, text=True, timeout=600)
+    duree_secondes = round(time.time() - start, 2)
     import json
-    import time
     meta = {
         "agent": agent_label, "client_id": client_id, "job_id": job_id, "cli_args": cli_args,
         "statut": "termine" if result.returncode == 0 else "erreur",
         "code_retour": result.returncode, "stdout": result.stdout[-5000:], "stderr": result.stderr[-5000:],
+        "duree_secondes": duree_secondes,
         "termine_le": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
     (job_dir / "job_meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    # Ecriture complementaire dans Supabase (table jobs) -- best-effort,
+    # ne doit jamais faire echouer le job lui-meme (voir
+    # app.core.jobs_db -- memes garanties que job_runner.run_agent_job,
+    # cette fonction etant le second point d'entree reellement utilise
+    # par 5 des 8 routers d'agents).
+    try:
+        from app.core.jobs_db import record_job_in_db, is_valid_uuid
+        if is_valid_uuid(client_id):
+            record_job_in_db(
+                job_id=job_id, client_id=client_id, agent=agent_label,
+                statut=meta["statut"], cli_args=cli_args,
+                code_retour=meta.get("code_retour"), duree_secondes=duree_secondes,
+                erreur=meta.get("stderr") if meta["statut"] == "erreur" else None,
+            )
+    except Exception:
+        pass  # jamais bloquant -- deja gere en interne par jobs_db (logs)
+
     return meta
 
 
