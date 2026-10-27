@@ -118,47 +118,103 @@ Une ecriture + lecture + suppression reelle (hors ces tests, directe)
 a aussi ete executee avec succes pour confirmer la mecanique de base,
 en plus des tests SQL.
 
-Etapes manuelles restantes (necessitent une decision utilisateur pour
-creer des comptes Auth de test) :
-1. Creer un utilisateur de test via Supabase Auth.
-2. L'ajouter a une `organisation` de test via `membres_organisation`.
-3. Verifier via l'API REST Supabase (ou le client Python) qu'il peut
-   lire ses propres projets et ANOMALIES mais recoit une liste vide
-   (pas une erreur serveur masquant les donnees -- RLS doit filtrer,
-   pas planter) pour l'organisation d'un autre utilisateur.
-4. Creer un 2e utilisateur dans une 2e organisation, repeter le test
-   en sens inverse.
-5. Redemarrer le service et confirmer que les donnees persistent
-   (test de redemarrage demande par la mission).
+Etapes executees reellement (2026-10-27, comptes de test jetables
+crees via l'API admin, confirmes supprimes apres) :
+1. Compte test cree, authentifie via le flux Auth normal (signup +
+   login), JWT obtenu sans jamais etre expose en log/chat.
+2. Route protegee de l'orchestrateur appelee avec ce JWT -- 200 OK.
+3. Job cree, persistance confirmee dans la table `jobs` (rattachement
+   exact au bon `client_id` = uuid Auth reel).
+4. JWT absent / invalide / forge -- tous rejetes (401), teste
+   reellement via de vrais appels HTTP.
+5. Acces croise entre 2 clients de test -- 404, isolation confirmee
+   au niveau applicatif (RLS teste separement via psycopg2 direct,
+   voir section 5 ci-dessus pour le detail test par test).
+6. DB Supabase injoignable (host invalide simule) -- echec absorbe
+   proprement par `jobs_db.record_job_in_db`, aucune exception,
+   serveur reste fonctionnel.
+7. Comptes et donnees de test supprimes (identite verifiee par email
+   avant suppression, cascade FK confirmee a 0 ligne residuelle).
 
-Tant que ces etapes n'ont pas ete executees avec un vrai projet
-Supabase, l'integration reste "implementee mais non testee en
-production" -- jamais annoncee comme active.
+Reste non teste : le scenario complet d'isolation RLS multi-organisation
+du schema 0001 (2 utilisateurs dans 2 organisations distinctes,
+lecture croisee de `projets`/`anomalies`) -- teste uniquement pour la
+table `jobs` (isolation par `client_id` direct, plus simple). A faire
+si un vrai second client utilise le modele organisationnel.
 
-## 6. Strategie de stockage des fichiers generes/importes
+## 6. Supabase Storage -- implemente et teste reellement
 
-Deux categories de fichiers, deux strategies distinctes :
+**Bucket** `agst-files` (prive, `public=false`) cree via l'API Storage
+(`POST /storage/v1/bucket`), limite de taille 25 Mo, types MIME
+autorises limites a xlsx/csv/json/txt/pdf/docx.
 
-- **Fichiers generes par les agents** (matrice XLSX, XLSForm,
-  registre d'alertes XLSX/CSV) : destines a **Supabase Storage**, un
-  bucket par organisation (`org-<organisation_id>`), avec policies de
-  storage miroir des policies RLS SQL (un utilisateur ne peut lire/
-  ecrire que dans le bucket de son organisation). La colonne
-  `formulaires.stockage_path` et une future colonne equivalente sur
-  `anomalies`/un futur `rapports` stockent la cle Storage, jamais le
-  contenu binaire en base.
-- **Fichiers sources importes par l'utilisateur** (description de
-  projet, CSV de soumissions) : memes bucket/policies -- jamais
-  stockes a la racine commune, toujours sous un prefixe
-  `org-<organisation_id>/projet-<projet_id>/`.
-- **Transition depuis le mode fichier local actuel** : le code
-  `platform/app/core/storage.py` isole deja par `client_id` -- la
-  migration vers Supabase Storage remplacera `STORAGE_ROOT / client_id`
-  par un prefixe de bucket equivalent, sans changer la logique
-  d'isolation deja en place (meme principe, autre backend).
-- **URLs de telechargement** : signees et a duree limitee (Supabase
-  Storage `createSignedUrl`), jamais d'URL publique permanente pour
-  un fichier contenant des donnees de projet/beneficiaires.
+**Table `fichiers`** (migration `0003_fichiers_storage.sql`) : une
+ligne par fichier, avec `client_id`, `job_id` (reference libre, pas de
+FK stricte), `projet_id` optionnel, `categorie`, cle de stockage non
+previsible (uuid, jamais le nom original), checksum SHA-256, taille,
+type MIME. RLS par `client_id = auth.uid()`.
+
+**Defense en profondeur** : en plus de la table `fichiers` (controle
+d'autorisation applicatif, fait par le backend a CHAQUE lecture/
+ecriture/suppression), 4 policies RLS existent directement sur
+`storage.objects` -- chaque objet doit etre stocke sous un prefixe
+`<client_id>/...` et `auth.uid()` doit correspondre exactement. La cle
+`service_role` (utilisee par le backend pour parler a Storage) n'est
+JAMAIS consideree comme un remplacement de ce controle applicatif --
+`get_file_metadata()` verifie toujours `client_id` avant toute
+operation, meme si techniquement le backend pourrait tout lire avec
+cette cle.
+
+**Module** `platform/app/core/storage_backend.py` : `upload_file`,
+`get_file_metadata`, `get_signed_download_url` (5 min par defaut),
+`delete_file` (suppression LOGIQUE uniquement), `sync_job_output_files`
+(upload best-effort des fichiers de sortie d'un job, jamais bloquant).
+
+**Routes** `platform/app/routers/files.py` : `POST /files/upload`,
+`GET /files/{id}/metadata`, `GET /files/{id}/download` (redirige vers
+URL signee), `DELETE /files/{id}`.
+
+**Teste reellement (2026-10-27)**, cycle complet via l'API HTTP avec
+2 comptes de test jetables :
+- upload -> metadata -> download (contenu verifie identique) -> OK
+- acces croise entre 2 clients (metadata ET download) -> 404 les deux
+- fichier inexistant -> 404 ; sans JWT -> 401
+- suppression logique -> fichier non lisible apres, OK
+- fichier > 25 Mo -> `FileTooLarge` ; extension interdite -> `UnsupportedFileType`
+- 8 tests unitaires (`tests/test_storage_backend.py`) sur la logique
+  sans reseau (validation, cle non previsible, config manquante)
+
+**Risque reel identifie par le test** (pas suppose) : la suppression
+d'un compte Supabase Auth declenche la cascade SQL sur `fichiers`
+(ligne supprimee), mais ne supprime JAMAIS l'objet physique dans
+Supabase Storage (systeme distinct, aucune cascade automatique).
+Confirme par test reel : objet retrouve dans le bucket apres
+suppression du compte et de sa ligne `fichiers`. **Tache de purge
+periodique des objets Storage orphelins non implementee** -- a
+prevoir avant toute suppression de compte en production.
+
+**Bug reel trouve et corrige pendant le test** : `mimetypes.guess_type()`
+renvoyait `application/vnd.ms-excel` pour un `.csv` sur cet
+environnement Windows, rejete par le bucket (configure pour
+`text/csv` strict) -- remplace par une table `EXTENSION_TO_MIME`
+explicite, plus fiable que la detection systeme.
+
+**Migration des fichiers locaux existants** : aucune migration
+automatique des fichiers deja presents dans `platform/storage/` --
+decision explicite de ne PAS migrer/supprimer les originaux locaux
+(coherent avec la contrainte de la mission). Le mode local
+(`app.core.storage`) reste pleinement fonctionnel et independant ;
+`sync_job_output_files` ajoute une copie Supabase en best-effort sans
+jamais remplacer ni supprimer les fichiers locaux.
+
+**Branche sur 3 routes** (`agents/survey-intelligence/indicator-matrix`,
+`xlsform-build`, `quality-check`) -- synchronisation best-effort testee
+en conditions reelles via un vrai pipeline (project-intake ->
+indicator-matrix), fichiers confirmes presents en base `fichiers` et
+dans le bucket apres l'appel. **Pas encore branche** sur les 5 autres
+routers (project-intake, xlsform-validate, et les 7 autres agents hors
+survey_intelligence) -- a etendre progressivement, sans urgence (le
+mode local reste la source de verite dans tous les cas).
 
 ## Ce qui est deja prepare cote code
 

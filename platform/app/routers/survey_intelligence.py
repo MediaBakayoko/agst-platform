@@ -48,6 +48,11 @@ async def indicator_matrix(
         ["--project", str(project_path), "--indicators", str(indicators_path), "--output-dir", str(job_dir)],
         scripts_dir=SI_SCRIPTS,
     )
+    try:
+        from app.core.storage_backend import sync_job_output_files
+        sync_job_output_files(client.client_id, job_id, job_dir, categorie="matrice_indicateurs")
+    except Exception:
+        pass
     return JobCreatedResponse(job_id=job_id, agent="survey_intelligence.indicator_matrix_builder", statut=meta["statut"],
                                message="Matrice d'indicateurs generee (brouillon) -- cibles manquantes a arbitrer avant approbation.")
 
@@ -64,6 +69,11 @@ async def xlsform_build(
     if form_title:
         cli_args += ["--form-title", form_title]
     meta = _run_script("xlsform_builder.py", "survey_intelligence.xlsform_builder", job_dir, client.client_id, job_id, cli_args, scripts_dir=SI_SCRIPTS)
+    try:
+        from app.core.storage_backend import sync_job_output_files
+        sync_job_output_files(client.client_id, job_id, job_dir, categorie="xlsform")
+    except Exception:
+        pass
     return JobCreatedResponse(job_id=job_id, agent="survey_intelligence.xlsform_builder", statut=meta["statut"],
                                message="XLSForm genere -- NON DEPLOYE. Valider puis approuver avant tout deploiement.")
 
@@ -96,6 +106,16 @@ async def quality_check(
         "--output-dir", str(job_dir),
     ]
     meta = _run_script("survey_quality_checks.py", "survey_intelligence.survey_quality_checks", job_dir, client.client_id, job_id, cli_args, scripts_dir=SI_SCRIPTS)
+
+    # Synchronisation best-effort vers Supabase Storage (registre
+    # d'alertes CSV/XLSX genere) -- n'affecte jamais le resultat local
+    # si Supabase n'est pas configure ou indisponible.
+    try:
+        from app.core.storage_backend import sync_job_output_files
+        sync_job_output_files(client.client_id, job_id, job_dir, categorie="registre_alertes")
+    except Exception:
+        pass
+
     return JobCreatedResponse(job_id=job_id, agent="survey_intelligence.survey_quality_checks", statut=meta["statut"],
                                message="Registre d'alertes genere, voir /jobs/{job_id}.")
 

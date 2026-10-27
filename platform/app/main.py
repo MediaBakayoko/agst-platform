@@ -36,6 +36,7 @@ from app.routers import (
     data_science_geoai,
     eudr_forest_monitoring,
     field2report,
+    files,
     geodata_quality,
     jobs,
     meal_project_performance,
@@ -110,6 +111,7 @@ app.include_router(data_science_geoai.router)
 app.include_router(academy_knowledge.router)
 app.include_router(survey_intelligence.router)
 app.include_router(jobs.router)
+app.include_router(files.router)
 
 
 @app.get("/health")
