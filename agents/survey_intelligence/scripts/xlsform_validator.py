@@ -181,6 +181,17 @@ def validate_xlsform(xlsform_path: Path) -> dict:
         "erreurs_bloquantes": errors,
         "avertissements": warnings,
         "pyxform_disponible": pyxform_result["disponible"],
+        # Distinction explicite des 3 niveaux de validation possibles
+        # (section 5 de la mission preproduction) -- ne jamais
+        # confondre une validation structurelle maison avec une
+        # conversion pyxform reussie, ni avec la validation XML
+        # stricte ODK (Java) qui N'EST JAMAIS executee dans cet
+        # environnement.
+        "niveaux_validation": {
+            "structurel_maison": "execute",
+            "conversion_pyxform": "execute" if pyxform_result["disponible"] else "non_disponible_pyxform_absent",
+            "validation_xml_odk_java": "non_execute_java_absent",
+        },
     }
 
 

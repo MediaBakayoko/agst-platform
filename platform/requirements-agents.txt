@@ -1,0 +1,19 @@
+# Dependances cumulees des 8 agents, necessaires dans le MEME
+# environnement Python que l'orchestrateur (job_runner.py appelle
+# chaque script agent via sys.executable -- meme interpreteur, donc
+# memes paquets installes). Liste reconstituee par audit reel des
+# imports de chaque agents/*/scripts/*.py (voir commande utilisee
+# dans le commit de reference) -- pas devinee.
+
+pandas>=2.0
+openpyxl>=3.1
+numpy>=1.24
+scipy>=1.11
+scikit-learn>=1.3
+matplotlib>=3.7
+python-docx>=1.1
+geopandas>=0.14
+shapely>=2.0
+rasterio>=1.3
+pyxform>=4.0
+requests>=2.30

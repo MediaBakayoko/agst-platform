@@ -29,17 +29,36 @@ confirme/choisi l'offre exacte -- ne pas deployer en aveugle.
 
 ## Configuration de production preparee (code pret, non deploye)
 
+- `Dockerfile` (nouveau, racine `platform/`) : image reproductible
+  (Python 3.11-slim, gunicorn + workers uvicorn, HEALTHCHECK Docker
+  natif sur `/health`). **Ecrit et relu, mais NON teste par
+  execution reelle** -- `docker build` a echoue car le moteur Docker
+  Desktop est installe mais son service est `STOPPED` (`sc query
+  com.docker.service` confirme), et le demarrer necessite une
+  elevation admin interactive que cette session ne peut pas
+  declencher. Action utilisateur necessaire : demarrer Docker Desktop
+  manuellement, puis relancer `docker build -f platform/Dockerfile -t
+  agst-platform:test .` depuis la racine du depot pour valider
+  reellement l'image avant toute utilisation.
 - `app/main.py` : limite de requetes (slowapi, 60/min par IP --
   valeur de depart, a ajuster), gestionnaire d'erreur global (jamais
   de trace exposee au client), journalisation structuree sans donnees
   sensibles.
 - `/health` : controle de sante basique (etendre pour verifier
   Supabase/Kobo une fois connectes).
-- Lancement production recommande :
+- Lancement production recommande (sans Docker, directement) :
   ```bash
   pip install -r requirements.txt
   gunicorn app.main:app -k uvicorn.workers.UvicornWorker -w 4 --bind 0.0.0.0:8000
   ```
+- Mesures reelles observees en local (dev, charge faible) :
+  processus uvicorn seul = ~7 Mo RSS au repos ; chaque job agent
+  s'execute dans un sous-processus Python ephemere (timeout 600s,
+  voir `job_runner.py`), donc le pic memoire depend de l'agent appele
+  (geodata_quality/field2report, plus lourds avec geopandas, montent
+  significativement plus haut que survey_intelligence -- mesure
+  precise sous charge reelle non faite, a prevoir avant un
+  dimensionnement VPS final).
 - Variables d'environnement a definir en production (jamais en dur) :
   `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_JWT_SECRET`,
   `SUPABASE_SERVICE_ROLE_KEY` (si taches serveur), credentials Kobo
