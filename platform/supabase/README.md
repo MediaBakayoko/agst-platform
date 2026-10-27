@@ -207,14 +207,62 @@ decision explicite de ne PAS migrer/supprimer les originaux locaux
 `sync_job_output_files` ajoute une copie Supabase en best-effort sans
 jamais remplacer ni supprimer les fichiers locaux.
 
-**Branche sur 3 routes** (`agents/survey-intelligence/indicator-matrix`,
-`xlsform-build`, `quality-check`) -- synchronisation best-effort testee
-en conditions reelles via un vrai pipeline (project-intake ->
-indicator-matrix), fichiers confirmes presents en base `fichiers` et
-dans le bucket apres l'appel. **Pas encore branche** sur les 5 autres
-routers (project-intake, xlsform-validate, et les 7 autres agents hors
-survey_intelligence) -- a etendre progressivement, sans urgence (le
-mode local reste la source de verite dans tous les cas).
+**Branche sur les 8 agents (2026-10-27)** :
+- 3 routes `survey_intelligence` (`indicator-matrix`, `xlsform-build`,
+  `quality-check`) : synchronisation ciblee par categorie explicite
+  (`matrice_indicateurs`/`xlsform`/`registre_alertes`), branchee
+  directement dans `app/routers/survey_intelligence.py`.
+- **5 agents restants etendus cette session**, via les 2 points
+  d'entree partages (pas de duplication de code) :
+  - `job_runner.run_agent_job()` -- `AGENT_STORAGE_CATEGORY` mappe
+    `geodata_quality`, `field2report`, `eudr_forest_monitoring` ->
+    categorie `rapport`.
+  - `consulting_business._run_script()` -- `AGENT_PREFIX_STORAGE_CATEGORY`
+    mappe les prefixes `consulting_business`, `academy_knowledge`,
+    `data_science_geoai`, `meal` -> categorie `rapport`
+    (`survey_intelligence.*` deliberement exclu de ce mapping pour
+    eviter un double-upload avec ses 3 routes dediees ci-dessus).
+- Extensions format : `ALLOWED_EXTENSIONS`/`EXTENSION_TO_MIME` elargis
+  a `.gpkg` (GeoPackage, geodata_quality) et `.png` (cartes/graphiques,
+  field2report/eudr_forest_monitoring/meal_project_performance).
+- **Bug reel trouve et corrige** : le bucket `agst-files` avait ete
+  cree avec une liste `allowed_mime_types` figee aux 6 types d'origine
+  -- l'upload d'un `.gpkg` (`geodata_quality`) echouait reellement avec
+  `415 invalid_mime_type` tant que le bucket lui-meme n'a pas ete mis a
+  jour via `PUT /storage/v1/bucket/agst-files` (en plus du changement
+  cote code) -- **les deux doivent toujours etre synchronises**.
+- **Teste reellement (2026-10-27)**, comptes de test jetables crees
+  et supprimes :
+  - `academy_knowledge.course_outline_builder` (via `_run_script`) :
+    job + fichier `plan_cours.json` confirmes en base.
+  - `geodata_quality` (via `run_agent_job`, fichier `.gpkg` reel) :
+    job + 2 fichiers (`.gpkg` + `.xlsx`) confirmes en base apres le
+    fix du bucket (echec partiel observe UNE fois avant le fix, due a
+    un flaky reseau TLS independant de ce bug -- "best-effort"
+    documente, reproduit en relancant le meme appel avec succes).
+  - `meal.results_framework` et `data_science_geoai.data_inspector`
+    (via `_run_script`) : jobs + fichiers confirmes en base.
+  - **Isolation croisee** : un 2e compte de test recoit 404 sur
+    `/files/{id}/metadata` ET `/files/{id}/download` pour un fichier
+    genere par `meal_project_performance` appartenant au 1er compte.
+  - **Telechargement autorise** : le proprietaire reel telecharge
+    avec succes (contenu verifie non vide, pas de trace d'erreur
+    exposee).
+  - 4 tests unitaires nouveaux (`tests/test_storage_agents_extension.py`)
+    verifient la completude des mappings et le declenchement
+    conditionnel de la synchronisation (jamais pour
+    `survey_intelligence.*` via ce chemin, toujours pour les autres
+    agents connus).
+- **Risque reseau observe (pas un bug de code)** : plusieurs echecs
+  TLS intermittents (`SSLEOFError`) sur les appels vers
+  `*.supabase.co` pendant cette session de test, non reproductibles a
+  volonte -- la nature best-effort de `sync_job_output_files` (jamais
+  bloquant) a absorbe ces echecs sans impact sur les jobs eux-memes;
+  signale comme risque d'environnement reseau, pas de code.
+- **Frontend** : aucun changement necessaire cette etape (aucune des
+  5 routes etendues n'etait deja consommee par une page frontend
+  specifique a ces fichiers) -- `npm run lint`/`npm run build` relances
+  par precaution, toujours 0 erreur.
 
 ## Ce qui est deja prepare cote code
 

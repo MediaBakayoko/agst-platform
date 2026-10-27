@@ -17,6 +17,25 @@ router = APIRouter(prefix="/agents/consulting-business", tags=["consulting_busin
 
 CONSULTING_SCRIPTS = AGENTS_ROOT / "consulting_business" / "scripts"
 
+# Categorie Supabase Storage par agent (prefixe de agent_label avant
+# le premier point) -- determine la categorie utilisee pour la
+# synchronisation best-effort des fichiers de sortie. Toutes les
+# categories autorisees par la contrainte CHECK de la table
+# `fichiers` (voir migration 0003) sauf celles deja gerees par les
+# routes survey_intelligence dediees (matrice_indicateurs/xlsform/
+# registre_alertes, branchees directement dans ce router-la).
+AGENT_PREFIX_STORAGE_CATEGORY = {
+    "consulting_business": "rapport",
+    "academy_knowledge": "rapport",
+    "data_science_geoai": "rapport",
+    "meal": "rapport",  # meal_project_performance utilise le prefixe court "meal."
+    # survey_intelligence.* n'est PAS liste ici : ses 3 routes
+    # concernees (indicator-matrix, xlsform-build, quality-check)
+    # appellent deja sync_job_output_files explicitement avec une
+    # categorie precise (matrice_indicateurs/xlsform/registre_alertes)
+    # -- eviter un double-upload avec la categorie generique "rapport".
+}
+
 
 def _run_script(script_name: str, agent_label: str, job_dir: Path, client_id: str, job_id: str, cli_args: list[str], scripts_dir: Path = None):
     import subprocess
@@ -53,6 +72,20 @@ def _run_script(script_name: str, agent_label: str, job_dir: Path, client_id: st
             )
     except Exception:
         pass  # jamais bloquant -- deja gere en interne par jobs_db (logs)
+
+    # Synchronisation best-effort vers Supabase Storage -- UNIQUEMENT
+    # pour les agents dont le prefixe est dans AGENT_PREFIX_STORAGE_CATEGORY
+    # (survey_intelligence.* est delibrement exclu : ses routes font
+    # deja leur propre synchronisation ciblee par categorie precise,
+    # voir commentaire sur AGENT_PREFIX_STORAGE_CATEGORY).
+    prefix = agent_label.split(".", 1)[0]
+    categorie = AGENT_PREFIX_STORAGE_CATEGORY.get(prefix)
+    if categorie:
+        try:
+            from app.core.storage_backend import sync_job_output_files
+            sync_job_output_files(client_id, job_id, job_dir, categorie=categorie)
+        except Exception:
+            pass
 
     return meta
 

@@ -27,7 +27,7 @@ SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL")
 BUCKET = "agst-files"
 
 MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024  # 25 Mo -- doit rester coherent avec le bucket (file_size_limit)
-ALLOWED_EXTENSIONS = {".xlsx", ".csv", ".json", ".txt", ".pdf", ".docx"}
+ALLOWED_EXTENSIONS = {".xlsx", ".csv", ".json", ".txt", ".pdf", ".docx", ".gpkg", ".png"}
 
 # Table MIME explicite -- mimetypes.guess_type() depend de la
 # configuration systeme (registre Windows notamment) et peut renvoyer
@@ -41,6 +41,8 @@ EXTENSION_TO_MIME = {
     ".txt": "text/plain",
     ".pdf": "application/pdf",
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".gpkg": "application/geopackage+sqlite3",
+    ".png": "image/png",
 }
 
 VALID_CATEGORIES = {

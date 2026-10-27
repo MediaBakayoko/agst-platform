@@ -26,6 +26,17 @@ AGENT_SCRIPTS = {
     "eudr_forest_monitoring": AGENTS_ROOT / "eudr_forest_monitoring" / "scripts" / "run_eudr_check.py",
 }
 
+# Categorie Supabase Storage par agent -- determine quelle categorie
+# (parmi celles autorisees par la contrainte CHECK de la table
+# `fichiers`) est utilisee pour la synchronisation best-effort des
+# fichiers de sortie. 'rapport' pour les 3 agents geres par
+# run_agent_job (rapports XLSX/DOCX/GPKG/PNG).
+AGENT_STORAGE_CATEGORY = {
+    "geodata_quality": "rapport",
+    "field2report": "rapport",
+    "eudr_forest_monitoring": "rapport",
+}
+
 
 def run_agent_job(
     agent_name: str,
@@ -91,6 +102,18 @@ def run_agent_job(
             )
     except Exception as exc:
         logger.info("Persistance Supabase ignoree pour job %s : %s", job_id, exc)
+
+    # Synchronisation best-effort des fichiers de sortie vers Supabase
+    # Storage -- jamais bloquant, le stockage fichier local reste la
+    # source de verite dans tous les cas (voir storage_backend.py).
+    try:
+        from app.core.storage_backend import sync_job_output_files
+        sync_job_output_files(
+            client_id, job_id, job_dir,
+            categorie=AGENT_STORAGE_CATEGORY.get(agent_name, "autre"),
+        )
+    except Exception as exc:
+        logger.info("Synchronisation Storage ignoree pour job %s : %s", job_id, exc)
 
     logger.info(
         "Job %s (agent=%s, client=%s) termine : statut=%s duree=%.2fs",
