@@ -1,0 +1,47 @@
+# Configuration Docker Compose preparee pour un deploiement VPS
+# Hostinger (ou equivalent). NON TESTEE PAR EXECUTION REELLE -- Docker
+# Desktop local est installe mais son service est STOPPED (verifie via
+# `sc query com.docker.service`), et son demarrage necessite une
+# elevation admin interactive que cette session ne peut pas declencher.
+# A valider reellement (`docker compose up`) avant toute mise en
+# service, en local d'abord si possible, puis sur le VPS cible.
+
+services:
+  agst-platform:
+    build:
+      context: ..
+      dockerfile: platform/Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ../platform/.env  # jamais commite, cree manuellement sur le VPS
+    expose:
+      - "8000"
+    volumes:
+      # Stockage fichier local best-effort -- la source de verite
+      # reelle des donnees de production est Supabase (DB + Storage),
+      # ce volume ne contient que la copie locale/temporaire.
+      - agst_storage:/app/platform/storage
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - agst-platform
+
+volumes:
+  agst_storage:
+  caddy_data:
+  caddy_config:

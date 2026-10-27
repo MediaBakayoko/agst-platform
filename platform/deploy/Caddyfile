@@ -1,0 +1,9 @@
+# Configuration Caddy minimale -- TLS Let's Encrypt automatique, pas
+# de certificat manuel a gerer. Remplacer <DOMAINE> par le vrai
+# sous-domaine une fois choisi/configure cote DNS.
+# NON TESTEE PAR EXECUTION REELLE (meme blocage Docker que
+# docker-compose.yml -- a valider avant mise en service).
+
+<DOMAINE> {
+    reverse_proxy agst-platform:8000
+}
