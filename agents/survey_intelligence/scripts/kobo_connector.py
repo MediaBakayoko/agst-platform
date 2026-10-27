@@ -11,14 +11,16 @@ faute de compte/token disponibles. Le code HTTP (requetes, pagination,
 retry, parsing) est reel et exerce par les tests ; seule la cible
 (serveur Kobo reel) n'a pas pu etre verifiee.
 
-Documentation officielle de reference (a reverifier au moment de la
-connexion reelle, les endpoints peuvent evoluer) :
+Documentation officielle de reference (reverifiee le 2026-10-27 via le
+schema OpenAPI de kf.kobotoolbox.org/api/v2/schema/?format=json) :
 https://support.kobotoolbox.org/api.html
 
-Endpoints utilises (API v2) :
+Endpoints utilises (API v2, verifies contre le schema reel) :
 - GET    /api/v2/assets/                    -> lister les projets accessibles
 - POST   /api/v2/assets/                    -> creer un projet (asset) vide
-- PATCH  /api/v2/assets/<uid>/              -> importer un XLSForm (content)
+- POST   /api/v2/imports/                   -> importer un XLSForm (endpoint dedie, asynchrone,
+                                                champs multipart file + destination=<URI asset>)
+- GET    /api/v2/imports/<uid>/             -> suivre le statut d'un import en cours
 - POST   /api/v2/assets/<uid>/deployment/   -> deployer la version active
 - GET    /api/v2/assets/<uid>/data/         -> recuperer les soumissions (paginee)
 
@@ -185,18 +187,49 @@ class KoboConnector:
         payload = {"name": name, "asset_type": "survey"}
         return self._request("POST", "/assets/", json=payload)
 
-    def import_xlsform(self, project_uid: str, xlsform_path: Path) -> dict:
-        """Importe un XLSForm dans un projet existant (PATCH avec le
-        contenu du fichier). Ne deploie PAS -- deploy_project separe.
+    def import_xlsform(self, project_uid: str, xlsform_path: Path, poll_timeout_s: int = 30) -> dict:
+        """Importe un XLSForm dans un projet existant via l'endpoint
+        DEDIE POST /imports/ (verifie contre le schema OpenAPI reel de
+        kf.kobotoolbox.org le 2026-10-27 -- PAS un PATCH direct sur
+        /assets/{uid}/ comme dans une version precedente de ce
+        connecteur, qui etait incorrecte).
+
+        Champs reels attendus par /imports/ (multipart/form-data) :
+        file (binaire), destination (URI complete de l'asset, pas
+        juste son uid). L'import est ASYNCHRONE cote Kobo -- on
+        interroge GET /imports/{uid}/ jusqu'a statut terminal
+        (complete/error), avec un timeout explicite.
         """
+        self._require_ready()
+        destination_uri = self.credentials.base_url.rstrip("/") + f"/assets/{project_uid}/"
         with open(xlsform_path, "rb") as f:
-            files = {"content": (xlsform_path.name, f, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
-            self._require_ready()
-            url = self.credentials.base_url.rstrip("/") + f"/assets/{project_uid}/"
-            resp = self._session.patch(url, headers=self._headers(), files=files, timeout=REQUEST_TIMEOUT_SECONDS)
+            files = {
+                "file": (xlsform_path.name, f, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+            }
+            data = {"destination": destination_uri}
+            url = self.credentials.base_url.rstrip("/") + "/imports/"
+            resp = self._session.post(url, headers=self._headers(), files=files, data=data, timeout=REQUEST_TIMEOUT_SECONDS)
             if resp.status_code >= 400:
-                raise KoboAPIError(f"Import XLSForm echoue ({resp.status_code}) : {resp.text[:300]}")
-            return resp.json() if resp.content else {}
+                raise KoboAPIError(f"Creation de l'import XLSForm echouee ({resp.status_code}) : {resp.text[:300]}")
+            import_result = resp.json()
+
+        import_uid = import_result.get("uid")
+        if not import_uid:
+            raise KoboAPIError("Reponse d'import Kobo sans 'uid' -- impossible de suivre le statut")
+
+        # L'import est asynchrone -- on interroge son statut jusqu'a
+        # une issue terminale (complete/error), avec un timeout explicite
+        # plutot qu'une attente indefinie.
+        deadline = time.time() + poll_timeout_s
+        while time.time() < deadline:
+            status_result = self._request("GET", f"/imports/{import_uid}/")
+            statut = status_result.get("status", "")
+            if statut in ("complete", "error"):
+                if statut == "error":
+                    raise KoboAPIError(f"Import XLSForm termine en erreur cote Kobo : {status_result}")
+                return status_result
+            time.sleep(1)
+        raise KoboAPIError(f"Import XLSForm toujours en cours apres {poll_timeout_s}s -- statut non confirme")
 
     def deploy_project(self, project_uid: str, confirmed_by_human: bool = False) -> dict:
         """Deploie la version active du projet. Refuse explicitement

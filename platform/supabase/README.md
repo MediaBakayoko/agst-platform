@@ -58,6 +58,21 @@ pip install supabase
 
 ## 5. Tester reellement avant de declarer l'integration active
 
+Un fichier de tests SQL est prepare :
+`platform/supabase/tests/0001_rls_isolation_tests.sql` -- a executer
+dans le SQL Editor Supabase (environnement de test, jamais directement
+sur une base de production) une fois la migration appliquee. Il
+verifie automatiquement :
+1. Toutes les tables attendues existent.
+2. RLS est active sur les 8 tables sensibles.
+3. Isolation reelle entre 2 organisations (bloc commente -- necessite
+   de creer 2 utilisateurs de test au prealable et de remplacer les
+   UUID placeholders avant de decommenter).
+4. Aucune colonne `cible`/`valeur_reference` n'a de valeur par defaut
+   non-NULL (verifie qu'aucune donnee n'est inventee au niveau schema).
+5. Les contraintes CHECK rejettent une valeur de statut invalide.
+
+Etapes manuelles complementaires (non automatisables sans vrais comptes) :
 1. Creer un utilisateur de test via Supabase Auth.
 2. L'ajouter a une `organisation` de test via `membres_organisation`.
 3. Verifier via l'API REST Supabase (ou le client Python) qu'il peut
@@ -69,9 +84,34 @@ pip install supabase
 5. Redemarrer le service et confirmer que les donnees persistent
    (test de redemarrage demande par la mission).
 
-Tant que ces 5 etapes n'ont pas ete executees avec un vrai projet
+Tant que ces etapes n'ont pas ete executees avec un vrai projet
 Supabase, l'integration reste "implementee mais non testee en
 production" -- jamais annoncee comme active.
+
+## 6. Strategie de stockage des fichiers generes/importes
+
+Deux categories de fichiers, deux strategies distinctes :
+
+- **Fichiers generes par les agents** (matrice XLSX, XLSForm,
+  registre d'alertes XLSX/CSV) : destines a **Supabase Storage**, un
+  bucket par organisation (`org-<organisation_id>`), avec policies de
+  storage miroir des policies RLS SQL (un utilisateur ne peut lire/
+  ecrire que dans le bucket de son organisation). La colonne
+  `formulaires.stockage_path` et une future colonne equivalente sur
+  `anomalies`/un futur `rapports` stockent la cle Storage, jamais le
+  contenu binaire en base.
+- **Fichiers sources importes par l'utilisateur** (description de
+  projet, CSV de soumissions) : memes bucket/policies -- jamais
+  stockes a la racine commune, toujours sous un prefixe
+  `org-<organisation_id>/projet-<projet_id>/`.
+- **Transition depuis le mode fichier local actuel** : le code
+  `platform/app/core/storage.py` isole deja par `client_id` -- la
+  migration vers Supabase Storage remplacera `STORAGE_ROOT / client_id`
+  par un prefixe de bucket equivalent, sans changer la logique
+  d'isolation deja en place (meme principe, autre backend).
+- **URLs de telechargement** : signees et a duree limitee (Supabase
+  Storage `createSignedUrl`), jamais d'URL publique permanente pour
+  un fichier contenant des donnees de projet/beneficiaires.
 
 ## Ce qui est deja prepare cote code
 

@@ -117,8 +117,15 @@ async def update_alert_status(
     du registre genere par un quality-check, avec historique conserve
     (jamais de perte de l'etat precedent). Ne modifie JAMAIS la
     soumission source -- uniquement le registre d'alertes derive.
+
+    Protege par un verrou fichier (filelock) pour eviter une
+    lecture-modification-ecriture concurrente qui ecraserait
+    silencieusement la mise a jour d'un autre superviseur sur le meme
+    job (risque reel identifie a l'audit : stockage fichier sans
+    base de donnees transactionnelle).
     """
     import pandas as pd
+    from filelock import FileLock, Timeout
     from app.core.storage import job_dir_for
 
     if body.nouveau_statut not in ALLOWED_ALERT_STATUSES:
@@ -136,37 +143,43 @@ async def update_alert_status(
     if not matches:
         raise HTTPException(404, "Registre d'alertes introuvable pour ce job")
     csv_path = matches[0]
+    lock_path = csv_path.with_suffix(".lock")
 
-    df = pd.read_csv(csv_path)
-    # object dtype explicite pour historique_corrections : c'est une
-    # colonne texte JSON, jamais numerique -- evite le FutureWarning
-    # pandas et le downcast errone si la colonne est entierement vide
-    # au depart (NaN -> float64 par defaut).
-    df["historique_corrections"] = df["historique_corrections"].astype(object)
-    mask = df["id_soumission"].astype(str) == str(id_soumission)
-    if not mask.any():
-        raise HTTPException(404, f"Aucune alerte trouvee pour id_soumission={id_soumission} dans ce job")
+    try:
+        with FileLock(str(lock_path), timeout=10):
+            df = pd.read_csv(csv_path)
+            # object dtype explicite pour historique_corrections : c'est une
+            # colonne texte JSON, jamais numerique -- evite le FutureWarning
+            # pandas et le downcast errone si la colonne est entierement vide
+            # au depart (NaN -> float64 par defaut).
+            df["historique_corrections"] = df["historique_corrections"].astype(object)
+            mask = df["id_soumission"].astype(str) == str(id_soumission)
+            if not mask.any():
+                raise HTTPException(404, f"Aucune alerte trouvee pour id_soumission={id_soumission} dans ce job")
 
-    import json as _json
-    from datetime import datetime, timezone
+            import json as _json
+            from datetime import datetime, timezone
 
-    for idx in df[mask].index:
-        historique_brut = df.at[idx, "historique_corrections"]
-        historique = []
-        if isinstance(historique_brut, str) and historique_brut.strip():
-            try:
-                historique = _json.loads(historique_brut)
-            except Exception:
-                historique = [{"ancien_contenu_non_structure": historique_brut}]
-        historique.append({
-            "horodatage": datetime.now(timezone.utc).isoformat(),
-            "ancien_statut": df.at[idx, "statut_resolution"],
-            "nouveau_statut": body.nouveau_statut,
-            "commentaire": body.commentaire,
-            "modifie_par": client.client_id,
-        })
-        df.at[idx, "statut_resolution"] = body.nouveau_statut
-        df.at[idx, "historique_corrections"] = _json.dumps(historique, ensure_ascii=False)
+            for idx in df[mask].index:
+                historique_brut = df.at[idx, "historique_corrections"]
+                historique = []
+                if isinstance(historique_brut, str) and historique_brut.strip():
+                    try:
+                        historique = _json.loads(historique_brut)
+                    except Exception:
+                        historique = [{"ancien_contenu_non_structure": historique_brut}]
+                historique.append({
+                    "horodatage": datetime.now(timezone.utc).isoformat(),
+                    "ancien_statut": df.at[idx, "statut_resolution"],
+                    "nouveau_statut": body.nouveau_statut,
+                    "commentaire": body.commentaire,
+                    "modifie_par": client.client_id,
+                })
+                df.at[idx, "statut_resolution"] = body.nouveau_statut
+                df.at[idx, "historique_corrections"] = _json.dumps(historique, ensure_ascii=False)
 
-    df.to_csv(csv_path, index=False)
+            df.to_csv(csv_path, index=False)
+    except Timeout:
+        raise HTTPException(409, "Une autre mise a jour est en cours sur ce registre -- reessayez dans un instant.")
+
     return {"statut": "mis_a_jour", "job_id": job_id, "id_soumission": id_soumission, "nouveau_statut": body.nouveau_statut}

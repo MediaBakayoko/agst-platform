@@ -67,6 +67,57 @@ def test_list_accessible_projects_follows_pagination():
 
 
 @responses.activate
+def test_import_xlsform_uses_dedicated_imports_endpoint(tmp_path):
+    """Verifie le contrat reel de l'API Kobo (verifie contre le schema
+    OpenAPI officiel le 2026-10-27) : l'import passe par POST /imports/
+    avec les champs 'file' + 'destination', PAS par un PATCH direct sur
+    /assets/{uid}/. L'import etant asynchrone, le connecteur doit
+    interroger GET /imports/{uid}/ jusqu'a statut 'complete'.
+    """
+    xlsform_path = tmp_path / "formulaire.xlsx"
+    xlsform_path.write_bytes(b"contenu_xlsx_factice")
+
+    responses.add(
+        responses.POST, BASE_URL + "imports/",
+        json={"uid": "imp123", "url": BASE_URL + "imports/imp123/", "status": "processing"},
+        status=201,
+    )
+    responses.add(
+        responses.GET, BASE_URL + "imports/imp123/",
+        json={"uid": "imp123", "status": "complete"},
+        status=200,
+    )
+
+    connector = KoboConnector(credentials=_creds())
+    result = connector.import_xlsform("asset123", xlsform_path, poll_timeout_s=5)
+    assert result["status"] == "complete"
+
+    post_call = responses.calls[0]
+    assert post_call.request.url.startswith(BASE_URL + "imports/")
+
+
+@responses.activate
+def test_import_xlsform_raises_on_kobo_side_error(tmp_path):
+    xlsform_path = tmp_path / "formulaire.xlsx"
+    xlsform_path.write_bytes(b"contenu_xlsx_factice")
+
+    responses.add(
+        responses.POST, BASE_URL + "imports/",
+        json={"uid": "imp456", "url": BASE_URL + "imports/imp456/", "status": "processing"},
+        status=201,
+    )
+    responses.add(
+        responses.GET, BASE_URL + "imports/imp456/",
+        json={"uid": "imp456", "status": "error", "messages": {"error": "Fichier XLSForm invalide"}},
+        status=200,
+    )
+
+    connector = KoboConnector(credentials=_creds())
+    with pytest.raises(KoboAPIError, match="erreur"):
+        connector.import_xlsform("asset123", xlsform_path, poll_timeout_s=5)
+
+
+@responses.activate
 def test_deploy_project_refuses_without_human_confirmation():
     connector = KoboConnector(credentials=_creds())
     with pytest.raises(PermissionError):
