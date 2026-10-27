@@ -264,6 +264,80 @@ jamais remplacer ni supprimer les fichiers locaux.
   specifique a ces fichiers) -- `npm run lint`/`npm run build` relances
   par precaution, toujours 0 erreur.
 
+## 7. KoboToolbox -- audit, routes reelles, blocage documente
+
+**Connecteur reutilise sans duplication** --
+`agents/survey_intelligence/scripts/kobo_connector.py` deja present
+(API Kobo v2/KPI v2 exclusivement, routes v1 jamais utilisees --
+confirme contre le schema OpenAPI officiel le 2026-10-27). 18 tests
+mock (`responses`) couvrent desormais aussi 401/403 explicites, un
+timeout reseau avec retry puis echec, et une reponse malformee
+(non-JSON) -- aucun crash non gere dans tous les cas.
+
+**Variables d'environnement requises** (`platform/.env`, jamais
+committe, jamais transmis au frontend) :
+```
+KOBO_BASE_URL=https://kf.kobotoolbox.org/api/v2/   # serveur Global
+# ou
+KOBO_BASE_URL=https://eu.kobotoolbox.org/api/v2/   # serveur Europe
+KOBO_API_TOKEN=<jeton personnel, Account Settings > Security > API Token>
+```
+`platform/app/core/kobo_config.py` lit ces 2 variables ; si l'une des
+deux est absente, `is_kobo_configured()` renvoie `False` et toute
+route Kobo repond `503` explicitement -- jamais de simulation de
+succes.
+
+**Routes reelles** (`platform/app/routers/kobo.py`), toutes en LECTURE
+SEULE pour cette phase :
+- `GET /agents/kobo/connection-check`
+- `GET /agents/kobo/projects`
+- `GET /agents/kobo/projects/{uid}/metadata`
+- `GET /agents/kobo/projects/{uid}/submissions`
+- `POST /agents/kobo/projects/{uid}/quality-check` -- enchaine
+  recuperation des soumissions Kobo -> conversion CSV -> **le meme
+  script** `survey_quality_checks.py` que l'upload manuel (aucune
+  duplication de logique) -> job standard consultable via `/jobs/{id}`.
+  Synchronise les soumissions source et le registre d'alertes
+  resultant vers Supabase Storage (categories `soumissions_importees`
+  et `registre_alertes`).
+
+Aucune route de deploiement/modification/suppression de formulaire
+Kobo n'est exposee via HTTP -- `kobo_connector.deploy_project()`
+existe et refuse deja sans `confirmed_by_human=True`, mais n'est
+branche sur aucune route tant qu'aucun test reel n'a ete effectue.
+
+**Tracabilite** : migration `0004_synchronisations_kobo.sql`
+(nouvelle table, RLS par `client_id=auth.uid()`) -- **appliquee
+reellement**, confirmee par connexion directe (table presente, RLS
+active). `platform/app/core/kobo_sync_db.py` journalise chaque
+tentative (succes/echec, nombre de soumissions, erreur tronquee --
+jamais le token) en best-effort, memes garanties que `jobs_db.py`.
+
+**BLOCAGE REEL (pas simule)** : aucun credential KoboToolbox
+disponible dans l'environnement -- verifie via `browser_vault_list`
+(aucun item Kobo, seulement Buffer/LinkedIn/Gmail) et via les
+variables d'environnement (`KOBO_BASE_URL`/`KOBO_API_TOKEN` absentes
+de `platform/.env` et du shell). **Aucun appel reel contre
+kf.kobotoolbox.org ou eu.kobotoolbox.org n'a ete effectue.**
+
+**Teste reellement (2026-10-27)**, en conditions reelles (serveur
+FastAPI lance, compte Supabase de test cree/supprime) : les 5 routes
+Kobo repondent toutes `503` avec le message de blocage explicite --
+confirme que le comportement "non configure" fonctionne correctement
+de bout en bout, sans jamais simuler un succes Kobo.
+
+**Procedure pour activer reellement** (une fois un compte/token
+disponibles) :
+1. Determiner le serveur reel (Global ou Europe) selon l'organisation
+   du compte Kobo.
+2. Ajouter `KOBO_BASE_URL`/`KOBO_API_TOKEN` a `platform/.env`.
+3. Relancer le serveur, appeler `GET /agents/kobo/connection-check`
+   avec un JWT valide -- doit renvoyer `{"configure": true, "connecte": true}`.
+4. Si succes, `GET /agents/kobo/projects` pour confirmer les projets
+   visibles, puis tester `submissions`/`quality-check` sur un
+   formulaire de test (jamais un formulaire de production au premier
+   essai).
+
 ## Ce qui est deja prepare cote code
 
 - `platform/supabase/migrations/0001_survey_intelligence_schema.sql` --

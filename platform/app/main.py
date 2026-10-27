@@ -39,6 +39,7 @@ from app.routers import (
     files,
     geodata_quality,
     jobs,
+    kobo,
     meal_project_performance,
     survey_intelligence,
 )
@@ -112,6 +113,7 @@ app.include_router(academy_knowledge.router)
 app.include_router(survey_intelligence.router)
 app.include_router(jobs.router)
 app.include_router(files.router)
+app.include_router(kobo.router)
 
 
 @app.get("/health")

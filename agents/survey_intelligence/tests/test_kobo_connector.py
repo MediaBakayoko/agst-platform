@@ -56,6 +56,60 @@ def test_check_connection_never_logs_token(caplog):
 
 
 @responses.activate
+def test_401_unauthorized_raises_explicit_error_no_retry():
+    """401 (token invalide/expire) est une erreur client -- pas de
+    retry (inutile de retenter avec le meme token invalide), erreur
+    explicite levee.
+    """
+    responses.add(responses.GET, BASE_URL + "assets/", status=401, json={"detail": "Invalid token."})
+    connector = KoboConnector(credentials=_creds())
+    with pytest.raises(KoboAPIError, match="401"):
+        connector.check_connection()
+    assert len(responses.calls) == 1
+
+
+@responses.activate
+def test_403_forbidden_raises_explicit_error_no_retry():
+    """403 (token valide mais sans permission sur cette ressource) --
+    meme traitement que 401 : erreur client, pas de retry.
+    """
+    responses.add(responses.GET, BASE_URL + "assets/", status=403, json={"detail": "You do not have permission."})
+    connector = KoboConnector(credentials=_creds())
+    with pytest.raises(KoboAPIError, match="403"):
+        connector.check_connection()
+    assert len(responses.calls) == 1
+
+
+@responses.activate
+def test_timeout_triggers_retry_then_raises_after_max_attempts():
+    """Un timeout reseau doit etre traite comme une erreur transitoire
+    (retry), pas comme une erreur client -- et finir par lever une
+    erreur explicite apres MAX_RETRIES tentatives epuisees.
+    """
+    import requests as requests_lib
+    responses.add(responses.GET, BASE_URL + "assets/", body=requests_lib.exceptions.Timeout("Timed out"))
+    responses.add(responses.GET, BASE_URL + "assets/", body=requests_lib.exceptions.Timeout("Timed out"))
+    responses.add(responses.GET, BASE_URL + "assets/", body=requests_lib.exceptions.Timeout("Timed out"))
+    connector = KoboConnector(credentials=_creds())
+    with pytest.raises(KoboAPIError):
+        connector.check_connection()
+    assert len(responses.calls) == 3  # MAX_RETRIES
+
+
+@responses.activate
+def test_malformed_json_response_raises_explicit_error_not_crash():
+    """Une reponse 200 mais au corps non-JSON (panne partielle cote
+    Kobo, proxy, etc.) ne doit jamais faire planter le connecteur avec
+    une exception non gerée -- erreur explicite et journalisee.
+    """
+    responses.add(responses.GET, BASE_URL + "assets/", body="<html>Service indisponible</html>",
+                   status=200, content_type="text/html")
+    connector = KoboConnector(credentials=_creds())
+    with pytest.raises(KoboAPIError):
+        connector.check_connection()
+
+
+@responses.activate
 def test_list_accessible_projects_follows_pagination():
     responses.add(responses.GET, BASE_URL + "assets/",
                    json={"results": [{"uid": "a1"}], "next": BASE_URL + "assets/?offset=1"}, status=200)

@@ -70,9 +70,10 @@ de les dupliquer.
 |---|---|---|
 | Moteur matrice/XLSForm/qualite | **Teste reellement** | 23 tests pytest + pipeline CLI + API bout-en-bout |
 | Validation XLSForm (pyxform) | **Teste reellement** (sans la passe Java/ODK Validate) | Conversion XLSForm->XForm reussie sur formulaire complexe |
-| Connecteur Kobo (HTTP, retry, pagination, idempotence) | **Teste contre un serveur mock** (`responses`), jamais contre un vrai Kobo | 12 tests pytest `test_kobo_connector.py` |
-| Deploiement Kobo reel | **En attente d'acces** -- aucun compte/token Kobo disponible | -- |
-| Supabase (persistance partagee, RLS) | **Migrations preparees, non appliquees** | `platform/supabase/migrations/0001_survey_intelligence_schema.sql` |
+| Connecteur Kobo (HTTP, retry, pagination, idempotence) | **Teste contre un serveur mock** (`responses`), jamais contre un vrai Kobo | 18 tests pytest `test_kobo_connector.py` (401/403/timeout/malforme ajoutes) |
+| Routes API Kobo (lecture seule : connexion, projets, metadonnees, soumissions, pipeline quality-check) | **Code reel branche, repond honnetement "non configure" (503) en l'absence de credentials** -- jamais appele contre un vrai serveur Kobo | `platform/app/routers/kobo.py`, teste reellement en conditions reelles (serveur + compte Supabase de test) que le 503 explicite est bien renvoye |
+| Deploiement Kobo reel | **Bloque, accès manquant** -- aucun compte/token Kobo disponible (verifie via browser_vault_list : aucun credential Kobo enregistre) | -- |
+| Supabase (persistance partagee, RLS) | **Projet reel cree, migrations appliquees** (0001-0004) | `platform/supabase/README.md` |
 
 ## Usage (sans Kobo -- mode autonome)
 
