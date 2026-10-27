@@ -77,6 +77,21 @@ def run_agent_job(
     meta["termine_le"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    # Ecriture complementaire dans Supabase (table jobs) -- best-effort,
+    # ne doit jamais faire echouer le job lui-meme. Le fichier
+    # job_meta.json ci-dessus reste la source de verite.
+    try:
+        from app.core.jobs_db import record_job_in_db, is_valid_uuid
+        if is_valid_uuid(client_id):
+            record_job_in_db(
+                job_id=job_id, client_id=client_id, agent=agent_name,
+                statut=meta["statut"], cli_args=cli_args,
+                code_retour=meta.get("code_retour"), duree_secondes=meta["duree_secondes"],
+                erreur=meta.get("erreur"),
+            )
+    except Exception as exc:
+        logger.info("Persistance Supabase ignoree pour job %s : %s", job_id, exc)
+
     logger.info(
         "Job %s (agent=%s, client=%s) termine : statut=%s duree=%.2fs",
         job_id, agent_name, client_id, meta["statut"], meta["duree_secondes"],

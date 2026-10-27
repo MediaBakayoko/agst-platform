@@ -48,32 +48,51 @@ npx supabase db push --password <mdp> --yes
 Confirme reellement via `npx supabase migration list` :
 `local=0001, remote=0001`.
 
-## 3. Recuperer les credentials
+## 3. Credentials recuperees (deja fait pour ce projet)
 
-Dans Project Settings -> API :
-- `SUPABASE_URL` (ex: `https://xxxx.supabase.co`)
-- `SUPABASE_ANON_KEY` (cle publique -- OK cote frontend, mais n'est PAS
-  un secret suffisant seule : l'autorisation reelle vient des policies
-  RLS, pas de cette cle)
-- `SUPABASE_JWT_SECRET` (Project Settings -> API -> JWT Settings) --
-  **secret serveur uniquement**, jamais dans le frontend
+Via `npx supabase projects api-keys --project-ref qtqrqatrdrrlqdtgulio --reveal` :
+- `SUPABASE_URL` = `https://qtqrqatrdrrlqdtgulio.supabase.co`
+- `SUPABASE_ANON_KEY` -- cle publique (OK cote frontend, mais pas un
+  secret suffisant seule : l'autorisation reelle vient des policies RLS)
 - `SUPABASE_SERVICE_ROLE_KEY` -- **secret serveur uniquement, jamais
-  dans le frontend**, utilise seulement pour des operations
-  d'administration explicites (ex: taches planifiees de
-  synchronisation Kobo tournant cote serveur)
+  dans le frontend**, reserve aux operations d'administration
+  explicites (ex: taches planifiees de synchronisation Kobo)
 
-## 4. Configurer le backend
+Note : `SUPABASE_JWT_SECRET` (HS256 legacy) n'est plus necessaire ---
+voir section 4, l'authentification utilise desormais la verification
+JWT moderne via JWKS (cles publiques ES256), pas de secret partage.
 
-Variables d'environnement (`platform/.env`, jamais committe) :
+## 4. Backend branche (deja fait)
+
+`platform/.env` (non commite, cree et verifie via `git check-ignore`) :
 ```
-SUPABASE_URL=https://xxxx.supabase.co
-SUPABASE_ANON_KEY=...
-SUPABASE_JWT_SECRET=...
-SUPABASE_SERVICE_ROLE_KEY=...
+SUPABASE_URL=https://qtqrqatrdrrlqdtgulio.supabase.co
+SUPABASE_ANON_KEY=<cle reelle>
+SUPABASE_SERVICE_ROLE_KEY=<cle reelle>
 ```
-Dès que `SUPABASE_JWT_SECRET` est present, `platform/app/core/auth.py`
-bascule automatiquement hors du mode developpement (`X-Client-Id`) et
-exige un Bearer token Supabase reel.
+
+`app/main.py` charge desormais `.env` via `python-dotenv` AVANT tout
+import de `app.*` (necessaire car `auth.py` lit `os.getenv` a
+l'import). `app/core/auth.py` reecrit pour verifier les JWT Supabase
+via JWKS (`<SUPABASE_URL>/auth/v1/.well-known/jwks.json`, ES256) --
+plus de secret partage HS256, approche moderne. Dès que
+`SUPABASE_URL` est present, le serveur bascule automatiquement hors
+du mode developpement et exige un Bearer token Supabase reel.
+
+**Verifie reellement** (2026-10-27) :
+- Serveur lance avec `.env` present -> une requete avec seulement
+  `X-Client-Id` (ancien mode dev) est bien rejetee
+  (`{"detail":"Token Supabase manquant"}`) : la bascule fonctionne.
+- 5 tests unitaires (`tests/test_auth_jwt.py`) avec une paire de cles
+  ES256 de test (pas un vrai compte Supabase, pour eviter de creer
+  des utilisateurs reels sans necessite) : token valide accepte,
+  token expire rejete, token signe avec une MAUVAISE cle rejete
+  (simulation d'attaque), mode dev toujours fonctionnel sans
+  SUPABASE_URL, requete sans Authorization rejetee. Tous passes.
+- **Non encore teste** : verification d'un vrai token emis par
+  Supabase Auth pour un vrai utilisateur (necessite de creer un
+  compte reel -- pas fait sans confirmation explicite
+  supplementaire, cf. section 5).
 
 Installer le client Python :
 ```bash
@@ -146,8 +165,36 @@ Deux categories de fichiers, deux strategies distinctes :
 - `platform/supabase/migrations/0001_survey_intelligence_schema.sql` --
   schema complet (organisations, membres, projets, indicateurs,
   formulaires, soumissions, anomalies, synchronisations) avec RLS par
-  organisation.
-- `platform/app/core/auth.py` -- squelette JWT deja pret, bascule
-  automatique dès que `SUPABASE_JWT_SECRET` est configure (voir code,
-  non modifie par cette mission -- deja fonctionnel structurellement,
-  jamais teste avec un vrai token Supabase).
+  organisation. **Applique reellement** (voir sections 1-2).
+- `platform/supabase/migrations/0002_jobs_tracking.sql` -- table
+  `jobs` generique (tous les 8 agents, pas seulement survey_intelligence),
+  RLS par `client_id = auth.uid()`. **Applique reellement** (meme
+  procedure `supabase db push`, confirme via connexion directe :
+  table presente, RLS active).
+- `platform/app/core/jobs_db.py` (nouveau) -- ecriture best-effort de
+  chaque job termine dans la table `jobs`, complementaire au fichier
+  `job_meta.json` qui reste la source de verite. Echoue toujours
+  proprement (jamais d'exception remontee) si `SUPABASE_DB_URL`
+  absent, si la connexion echoue, ou si `client_id` n'est pas un UUID
+  Supabase Auth valide (mode developpement) -- **teste reellement** :
+  echec propre confirme avec un UUID syntaxiquement valide mais
+  inexistant dans `auth.users` (violation de contrainte FK attendue,
+  aucun crash). **Non teste** : ecriture reussie de bout en bout avec
+  un vrai utilisateur Auth existant -- necessite de creer un compte
+  de test, pas fait sans confirmation explicite (demandee, sans
+  reponse dans le delai).
+- `platform/app/core/job_runner.py` -- appelle `jobs_db.record_job_in_db`
+  apres chaque job, dans un bloc `try/except` qui absorbe toute
+  erreur -- ne peut jamais faire echouer un job agent.
+- `platform/app/core/auth.py` -- **reecrit et branche reellement**.
+  Verifie les JWT Supabase via JWKS (ES256, cles publiques, pas de
+  secret partage). Bascule confirmee par test reel : avec `.env`
+  present, une requete avec seulement `X-Client-Id` (ancien mode dev)
+  est rejetee par le serveur reellement lance.
+- `platform/app/main.py` -- charge `.env` via `python-dotenv` avant
+  tout import de `app.*` (necessaire car plusieurs modules lisent
+  `os.getenv` a l'import).
+- `platform/.env` (non commite, cree avec les vraies cles du projet
+  `agst-survey-intelligence`) : `SUPABASE_URL`, `SUPABASE_ANON_KEY`,
+  `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_DB_URL` (connexion directe
+  Postgres, utilisee par `jobs_db.py`).

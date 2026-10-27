@@ -15,6 +15,13 @@ from __future__ import annotations
 import logging
 import time
 
+# IMPORTANT : charger .env AVANT tout import de app.* -- plusieurs
+# modules (app.core.auth notamment) lisent os.getenv() au moment de
+# l'import, pas a l'execution. Si .env est charge trop tard, le
+# serveur reste en DEV_MODE par erreur.
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
