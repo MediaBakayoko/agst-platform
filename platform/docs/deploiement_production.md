@@ -27,19 +27,26 @@ d'agir) : un VPS Hostinger est necessaire, pas l'hebergement web
 mutualise standard.** Decision bloquee tant que l'utilisateur n'a pas
 confirme/choisi l'offre exacte -- ne pas deployer en aveugle.
 
-## Configuration de production preparee (code pret, non deploye)
+## Configuration de production preparee (code pret, build Docker verifie en local)
 
-- `Dockerfile` (nouveau, racine `platform/`) : image reproductible
-  (Python 3.11-slim, gunicorn + workers uvicorn, HEALTHCHECK Docker
-  natif sur `/health`). **Ecrit et relu, mais NON teste par
-  execution reelle** -- `docker build` a echoue car le moteur Docker
-  Desktop est installe mais son service est `STOPPED` (`sc query
-  com.docker.service` confirme), et le demarrer necessite une
-  elevation admin interactive que cette session ne peut pas
-  declencher. Action utilisateur necessaire : demarrer Docker Desktop
-  manuellement, puis relancer `docker build -f platform/Dockerfile -t
-  agst-platform:test .` depuis la racine du depot pour valider
-  reellement l'image avant toute utilisation.
+- `Dockerfile` (racine `platform/`) : image reproductible (Python
+  3.11-slim, gunicorn + workers uvicorn, HEALTHCHECK Docker natif sur
+  `/health`). **Build + run + healthcheck reellement executes et
+  verifies le 2026-10-28** : `docker build -f platform/Dockerfile -t
+  agst-platform:test .` termine avec succes (image ~612 Mo, toutes
+  les dependances geospatiales GDAL/geopandas installees), conteneur
+  lance sur un port de test (8010, pour ne pas entrer en conflit avec
+  d'autres services locaux), `docker ps` confirme `STATUS: Up
+  (healthy)`, `curl http://127.0.0.1:8010/health` renvoie
+  `{"status":"ok",...}` en 200, logs du conteneur inspectes --
+  aucun secret present. Conteneur et image de test supprimes ensuite
+  (`docker stop/rm/rmi`), aucune donnee residuelle. Precedemment ce
+  build echouait (`com.docker.service` STOPPED, pas d'elevation admin
+  disponible) -- le blocage s'est leve entre les deux sessions (raison
+  exacte non determinee : le service a pu etre demarre par un
+  redemarrage systeme ou une action utilisateur hors de cette
+  session). Procedure de rollback formalisee : voir
+  `rollback_docker.md`.
 - `app/main.py` : limite de requetes (slowapi, 60/min par IP --
   valeur de depart, a ajuster), gestionnaire d'erreur global (jamais
   de trace exposee au client), journalisation structuree sans donnees
@@ -170,12 +177,17 @@ catalogue consulte reellement.
    nombre de vCPU/RAM reel) -- **non verifiee en direct cette
    session**, estimation ci-dessus basee sur le besoin mesure
    uniquement.
-2. Demarrer Docker Desktop localement (ou sur le VPS directement) et
-   executer reellement `docker build` + `docker run` au moins une
-   fois avant la mise en service -- jamais fait a ce jour (blocage
-   recurrent documente).
-3. Restreindre CORS a l'origine frontend reelle (toujours `*`
-   actuellement).
+2. ~~Demarrer Docker Desktop localement et executer reellement
+   `docker build` + `docker run`~~ -- **FAIT le 2026-10-28** (voir
+   section ci-dessus). Reste a refaire une fois sur le VPS cible lui
+   meme avant la premiere mise en service reelle (l'engine Docker du
+   VPS n'a jamais ete teste, seulement l'environnement local Windows).
+3. ~~Restreindre CORS a l'origine frontend reelle~~ -- **FAIT**
+   (`CORS_ALLOWED_ORIGINS` configurable par env, repli localhost,
+   plus jamais `*` par defaut -- commit `b1b25b3`). Reste a renseigner
+   la vraie valeur de production : **aucune URL Lovable n'a jamais ete
+   figee/communiquee a ce jour** -- a obtenir auprès de l'utilisateur
+   avant la mise en service (ne pas inventer cette valeur).
 4. Decider du canal de notification email (aucun fournisseur choisi,
    voir `docs/notifications_prerequis.md`) -- pas bloquant pour le
    deploiement lui-meme, mais a traiter avant une annonce aux
