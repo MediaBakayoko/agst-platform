@@ -123,7 +123,14 @@ class KoboConnector:
             )
 
     def _headers(self) -> dict:
-        return {"Authorization": f"Token {self.credentials.api_token}", "Accept": "application/json"}
+        return {
+            "Authorization": f"Token {self.credentials.api_token}",
+            "Accept": "application/json",
+            # Sans User-Agent de navigateur, le WAF devant kf.kobotoolbox.org
+            # renvoie un 403 generique avant meme d'atteindre Django -- verifie
+            # le 2026-10-27 contre le serveur reel.
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        }
 
     def _request(self, method: str, path: str, **kwargs) -> dict:
         """Execute une requete HTTP avec retry/backoff sur erreurs
