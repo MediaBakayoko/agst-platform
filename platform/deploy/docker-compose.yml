@@ -13,7 +13,7 @@ services:
       dockerfile: platform/Dockerfile
     restart: unless-stopped
     env_file:
-      - ../platform/.env  # jamais commite, cree manuellement sur le VPS
+      - ../.env  # jamais commite, cree manuellement sur le VPS (platform/.env, chemin relatif a platform/deploy/)
     expose:
       - "8000"
     volumes:

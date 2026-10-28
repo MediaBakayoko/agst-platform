@@ -13,6 +13,7 @@ Lancer en production (ex: gunicorn + workers uvicorn) :
 from __future__ import annotations
 
 import logging
+import os
 import time
 
 # IMPORTANT : charger .env AVANT tout import de app.* -- plusieurs
@@ -67,12 +68,19 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
 
-# CORS : a restreindre a l'origine reelle du frontend avant tout usage
-# client reel (actuellement '*' car l'origine Lovable finale n'est pas
-# encore figee -- TODO explicite, ne pas oublier avant mise en production).
+# CORS : origines lues depuis CORS_ALLOWED_ORIGINS (liste separee par
+# des virgules, ex: "https://app.agst.example.com,https://agst.lovable.app").
+# Repli explicite sur localhost en developpement si la variable est
+# absente -- jamais '*' par defaut, pour ne pas exposer l'API a
+# n'importe quelle origine une fois en production.
+_cors_env = os.getenv("CORS_ALLOWED_ORIGINS", "")
+CORS_ALLOWED_ORIGINS = [o.strip() for o in _cors_env.split(",") if o.strip()] or [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # TODO: restreindre a l'origine Lovable/production avant mise en service reelle
+    allow_origins=CORS_ALLOWED_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )

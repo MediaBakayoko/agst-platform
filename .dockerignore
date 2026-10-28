@@ -1,0 +1,31 @@
+# Jamais dans l'image Docker -- secrets, environnements virtuels,
+# caches et artefacts locaux. Les secrets reels sont injectes au
+# runtime via env_file: (docker-compose) ou les variables d'env du
+# VPS, jamais copies dans l'image elle-meme.
+
+**/.env
+**/.env.*
+!**/.env.example
+**/.supabase_db_password.local
+
+**/__pycache__/
+**/*.pyc
+**/.pytest_cache/
+
+**/venv/
+**/.venv/
+
+**/node_modules/
+
+**/*.log
+platform/storage/
+agents/*/output/
+
+.git/
+.gitignore
+.dockerignore
+
+# Documentation volumineuse non necessaire a l'image runtime (reduit
+# le contexte de build, pas une question de securite ici).
+docs/
+platform/docs/
