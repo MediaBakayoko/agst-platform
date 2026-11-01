@@ -82,6 +82,7 @@ def main() -> int:
     ap.add_argument("--text-fields", default="")
     ap.add_argument("--required-fields", default="")
     ap.add_argument("--dedup-key-fields", default="")
+    ap.add_argument("--no-ia", action="store_true")
     args = ap.parse_args()
 
     input_path = Path(args.input_file)
@@ -166,6 +167,7 @@ def main() -> int:
         group_field=args.group_field,
         started_at=started_at,
         finished_at=finished_at,
+        no_ia=args.no_ia,
     )
     logger.info("Rapport Word ecrit : %s", report_path)
 

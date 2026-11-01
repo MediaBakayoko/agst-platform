@@ -5,14 +5,61 @@ Le rapport ne contient que des informations calculees reellement a
 partir des donnees. La section "Limites" est toujours generee a partir
 des biais et anomalies reellement detectes, jamais d'un texte generique
 vide de sens.
+
+Section "Interpretation" (optionnelle, IA) : si ANTHROPIC_API_KEY est
+configuree, Claude redige une interpretation en langage clair des
+statistiques REELLEMENT calculees (jamais un chiffre invente) --
+toujours marquee "[INTERPRETATION IA -- A VALIDER]".
 """
 from __future__ import annotations
 
+import json
+import sys
 from pathlib import Path
 from typing import Optional
 
 from docx import Document
 from docx.shared import Mm, Pt, RGBColor
+
+
+def interpret_results_with_ia(stats_df, anomalies: list[dict], bias_notes: list[str]) -> str | None:
+    """Demande a Claude une interpretation en langage clair des
+    statistiques REELLEMENT calculees (stats_df), sans jamais
+    inventer un chiffre absent de ce tableau. Retourne None si
+    aucune cle API configuree ou si l'appel echoue.
+    """
+    if stats_df is None or stats_df.empty:
+        return None
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "_shared"))
+    from llm_connector import get_claude_connector, LLMNotConfiguredError, LLMAPIError
+    import logging
+    logger = logging.getLogger("field2report.report_builder")
+
+    try:
+        connector = get_claude_connector()
+        system_prompt = (
+            "Tu es un statisticien/geomaticien specialise en enquetes terrain. On te donne "
+            "des statistiques descriptives REELLEMENT calculees sur des donnees d'enquete "
+            "(tableau complet), les anomalies detectees et les biais signales -- tu ne dois "
+            "JAMAIS inventer un chiffre absent de ces donnees. Redige une interpretation en "
+            "langage clair (3-5 phrases) pour un non-statisticien : ce que montrent les "
+            "chiffres, les points de vigilance (lies aux anomalies/biais reels), sans tirer de "
+            "conclusion causale non justifiee par de simples statistiques descriptives.\n\n"
+            "Reponds UNIQUEMENT en JSON valide : {\"interpretation\": \"...\"}"
+        )
+        user_content = (
+            f"Statistiques calculees :\n{stats_df.to_json(orient='records', force_ascii=False)}\n\n"
+            f"Anomalies detectees (nombre) : {len(anomalies)}\n"
+            f"Notes de biais signalees : {json.dumps(bias_notes, ensure_ascii=False)}"
+        )
+        result = connector.generate_json(system_prompt, user_content)
+        return result.get("interpretation")
+    except LLMNotConfiguredError as exc:
+        logger.info("Interpretation IA desactivee : %s", exc)
+        return None
+    except LLMAPIError as exc:
+        logger.warning("Interpretation IA indisponible (echec appel) : %s", str(exc)[:500])
+        return None
 
 
 def build_report(
@@ -28,6 +75,7 @@ def build_report(
     group_field: Optional[str],
     started_at: str,
     finished_at: str,
+    no_ia: bool = False,
 ) -> None:
     doc = Document()
     section = doc.sections[0]
@@ -105,6 +153,15 @@ def build_report(
             ).italic = True
     else:
         doc.add_paragraph("Aucune variable numérique à analyser n'a été fournie.")
+
+    interpretation = None if no_ia else interpret_results_with_ia(stats_df, anomalies, bias_notes)
+    if interpretation:
+        doc.add_heading("Interprétation (brouillon)", level=2)
+        p = doc.add_paragraph()
+        run = p.add_run("[INTERPRETATION IA -- A VALIDER]  ")
+        run.bold = True
+        run.font.color.rgb = RGBColor(0xB8, 0x6A, 0x00)
+        p.add_run(interpretation)
 
     if map_path and Path(map_path).exists():
         doc.add_heading("4. Cartographie", level=1)

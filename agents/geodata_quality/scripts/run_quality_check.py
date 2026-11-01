@@ -18,6 +18,7 @@ sous-dossier horodate de --output-dir.
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
 from datetime import datetime
@@ -26,6 +27,8 @@ from pathlib import Path
 import openpyxl
 from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "_shared"))
 
 sys.path.insert(0, str(Path(__file__).parent))
 from quality_checks import run_quality_checks  # noqa: E402
@@ -37,7 +40,54 @@ def _parse_list(value: str | None) -> list[str]:
     return [v.strip() for v in value.split(",") if v.strip()]
 
 
-def write_excel_report(result, output_path: Path) -> None:
+def generate_synthesis_with_ia(result) -> dict | None:
+    """Demande a Claude une synthese en langage clair des anomalies
+    REELLEMENT detectees (jamais une nouvelle anomalie inventee) --
+    priorisation et explications pour un non-specialiste. Retourne
+    None si aucune cle API configuree ou si l'appel echoue --
+    l'appelant doit alors continuer avec le rapport habituel (tableau
+    brut), jamais simuler une synthese.
+    """
+    from llm_connector import get_claude_connector, LLMNotConfiguredError, LLMAPIError
+
+    summary_df = result.summary_by_type()
+    if summary_df.empty:
+        return None
+    counts = summary_df.to_dict(orient="records")
+
+    try:
+        connector = get_claude_connector()
+        system_prompt = (
+            "Tu es un expert qualite de donnees geospatiales (SIG). On te donne le RELEVE REEL "
+            "des anomalies detectees par un controle automatique (types et nombres, deja "
+            "calcules -- tu ne dois JAMAIS inventer une anomalie ou un chiffre absent de cette "
+            "liste). Ta tache : produire une synthese en langage clair pour un utilisateur "
+            "non-specialiste SIG, avec priorisation des problemes a traiter en premier et une "
+            "explication courte de pourquoi chaque type d'anomalie importe.\n\n"
+            "Reponds UNIQUEMENT en JSON valide :\n"
+            '{"synthese_generale": "2-3 phrases resumant l\'etat global", '
+            '"priorites": [{"type_anomalie": "...", "pourquoi_important": "...", "action_recommandee": "..."}]}'
+        )
+        user_content = (
+            f"Releve reel des anomalies (type_anomalie, severite, nombre) :\n{json.dumps(counts, ensure_ascii=False, indent=2)}\n"
+            f"Nombre total d'entites analysees : {result.n_features}"
+        )
+        synthesis = connector.generate_json(system_prompt, user_content)
+        # Verrou : ne garder que les priorites portant sur des types
+        # d'anomalie reellement presents dans le releve -- jamais un
+        # type invente par le modele.
+        known_types = {c["type_anomalie"] for c in counts}
+        synthesis["priorites"] = [p for p in synthesis.get("priorites", []) if p.get("type_anomalie") in known_types]
+        return synthesis
+    except LLMNotConfiguredError as exc:
+        logging.getLogger("geodata_quality.cli").info("Synthese IA desactivee : %s", exc)
+        return None
+    except LLMAPIError as exc:
+        logging.getLogger("geodata_quality.cli").warning("Synthese IA indisponible (echec appel) : %s", str(exc)[:500])
+        return None
+
+
+def write_excel_report(result, output_path: Path, synthesis: dict | None = None) -> None:
     wb = openpyxl.Workbook()
 
     # --- Feuille Resume ---
@@ -108,6 +158,29 @@ def write_excel_report(result, output_path: Path) -> None:
     ws3.column_dimensions["A"].width = 30
     ws3.column_dimensions["B"].width = 50
 
+    # --- Feuille Synthese & recommandations (IA, optionnelle) ---
+    if synthesis:
+        ws4 = wb.create_sheet("Synthese IA")
+        ws4.cell(row=1, column=1, value="SYNTHESE EN LANGAGE CLAIR -- genere par IA, a valider").font = Font(bold=True, color="1F3864", size=12)
+        ws4.cell(row=2, column=1, value="Base uniquement sur les anomalies reellement detectees ci-dessus -- aucun chiffre invente.").font = Font(italic=True)
+        ws4.cell(row=4, column=1, value=synthesis.get("synthese_generale", ""))
+        ws4.cell(row=4, column=1).alignment = openpyxl.styles.Alignment(wrap_text=True)
+        ws4.row_dimensions[4].height = 40
+
+        ws4.cell(row=6, column=1, value="Priorite").font = Font(bold=True, color="FFFFFF")
+        ws4.cell(row=6, column=1).fill = header_fill
+        ws4.cell(row=6, column=2, value="Pourquoi c'est important").font = Font(bold=True, color="FFFFFF")
+        ws4.cell(row=6, column=2).fill = header_fill
+        ws4.cell(row=6, column=3, value="Action recommandee").font = Font(bold=True, color="FFFFFF")
+        ws4.cell(row=6, column=3).fill = header_fill
+        for i, p in enumerate(synthesis.get("priorites", []), start=7):
+            ws4.cell(row=i, column=1, value=p.get("type_anomalie", ""))
+            ws4.cell(row=i, column=2, value=p.get("pourquoi_important", ""))
+            ws4.cell(row=i, column=3, value=p.get("action_recommandee", ""))
+        ws4.column_dimensions["A"].width = 28
+        ws4.column_dimensions["B"].width = 50
+        ws4.column_dimensions["C"].width = 50
+
     wb.save(output_path)
 
 
@@ -123,6 +196,7 @@ def main() -> int:
     ap.add_argument("--area-field", default=None, help="Champ de surface declaree (en hectares) a comparer au calcul SIG")
     ap.add_argument("--area-tolerance-pct", type=float, default=20.0, help="Tolerance d'ecart surface declaree vs SIG, en %% (defaut 20)")
     ap.add_argument("--dup-tolerance-m", type=float, default=0.0, help="Tolerance de distance pour les doublons geometriques, en metres (defaut 0 = identite stricte)")
+    ap.add_argument("--no-ia", action="store_true", help="Desactive la synthese IA")
     args = ap.parse_args()
 
     input_path = Path(args.input_file)
@@ -157,8 +231,9 @@ def main() -> int:
     )
 
     excel_path = run_dir / "rapport_qualite.xlsx"
-    write_excel_report(result, excel_path)
-    logger.info("Rapport Excel ecrit : %s", excel_path)
+    synthesis = None if args.no_ia else generate_synthesis_with_ia(result)
+    write_excel_report(result, excel_path, synthesis=synthesis)
+    logger.info("Rapport Excel ecrit : %s%s", excel_path, " (avec synthese IA)" if synthesis else "")
 
     gdf = getattr(result, "_gdf", None)
     gpkg_path = None
