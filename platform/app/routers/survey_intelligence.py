@@ -30,7 +30,9 @@ async def project_intake(file: UploadFile, client: ClientIdentity = Depends(get_
     meta = _run_script("project_intake.py", "survey_intelligence.project_intake", job_dir, client.client_id, job_id,
                         [str(desc_path), "--output-dir", str(job_dir)], scripts_dir=SI_SCRIPTS)
     return JobCreatedResponse(job_id=job_id, agent="survey_intelligence.project_intake", statut=meta["statut"],
-                               message="Projet structure, voir /jobs/{job_id}. Elements manquants a demander explicitement.")
+                               message=("Projet structure (project_structured.json) + document de cadrage lisible "
+                                        "(cadrage_projet.docx), voir /jobs/{job_id}. Les elements marques "
+                                        "'proposition IA' doivent etre valides avant usage."))
 
 
 @router.post("/indicator-matrix", response_model=JobCreatedResponse)

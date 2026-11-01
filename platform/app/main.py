@@ -46,6 +46,7 @@ from app.routers import (
 )
 
 logger = logging.getLogger("agst_platform")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
 # Limite de requetes par defaut -- protection minimale contre les abus
 # avant tout deploiement public. A ajuster une fois le volume reel de
