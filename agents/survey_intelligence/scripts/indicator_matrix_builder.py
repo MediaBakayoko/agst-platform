@@ -39,11 +39,65 @@ MATRIX_COLUMNS = [
     "formule", "numerateur", "denominateur", "unite", "valeur_reference", "cible",
     "source_verification", "methode_collecte", "frequence", "desagregation",
     "question_necessaire", "regle_qualite", "limites_methodologiques", "statut_validation",
+    "origine",
 ]
+# Colonnes qu'une proposition IA ne doit JAMAIS renseigner -- restent
+# toujours a l'arbitrage humain, meme pour un indicateur propose.
+COLONNES_INTERDITES_A_L_IA = {"cible", "valeur_reference", "statut_validation"}
 REQUIRED_FOR_DEPLOY = ["intitule", "definition", "formule", "source_verification", "frequence"]
 TYPES_INDICATEUR_VALIDES = {"realisation", "resultat", "impact"}
 STATUTS_VALIDATION_VALIDES = {"propose", "approuve", "rejete"}
 DEFAULT_STATUT_VALIDATION = "propose"
+
+
+def propose_indicators_with_ia(project_elements: dict, existing_intitules: list[str]) -> list[dict]:
+    """Demande a Claude de proposer des indicateurs supplementaires
+    pertinents, a partir du contexte reel du projet (objectifs, zone,
+    beneficiaires detectes/proposes a l'etape de cadrage) -- jamais a
+    partir d'un modele generique hors contexte.
+
+    Ne propose JAMAIS de valeur pour cible/valeur_reference/
+    statut_validation (COLONNES_INTERDITES_A_L_IA) -- uniquement la
+    definition de l'indicateur, a l'utilisateur de chiffrer. Chaque
+    indicateur propose porte origine='proposition_ia'.
+
+    Leve LLMNotConfiguredError si aucune cle API -- l'appelant doit
+    alors continuer sans proposition, jamais simuler un succes.
+    """
+    from llm_connector import get_claude_connector
+
+    connector = get_claude_connector()
+    contexte = {k: v for k, v in project_elements.items() if v}
+
+    system_prompt = (
+        "Tu es un expert en suivi-evaluation (M&E) de projets de developpement/geospatial. "
+        "A partir du contexte reel d'un projet (contexte, objectifs, beneficiaires, zone, "
+        "activites detectes dans son TDR), propose des indicateurs de suivi PERTINENTS pour "
+        "ce projet precis -- jamais une liste generique hors contexte. "
+        "Ne propose JAMAIS de valeur chiffree pour cible ou valeur_reference -- laisse ces "
+        "champs vides, ce sont des decisions humaines. "
+        "N'inclus pas les indicateurs deja presents dans cette liste existante : "
+        f"{existing_intitules}\n\n"
+        "Reponds UNIQUEMENT en JSON valide, sans texte autour, format exact :\n"
+        '{"indicateurs_proposes": [{"intitule": "...", "type_indicateur": "realisation|resultat|impact", '
+        '"definition": "...", "formule": "...", "unite": "...", "methode_collecte": "...", '
+        '"justification": "pourquoi cet indicateur est pertinent pour CE projet precis"}]}'
+    )
+    user_content = f"Contexte reel du projet :\n{json.dumps(contexte, ensure_ascii=False, indent=2)}"
+
+    result = connector.generate_json(system_prompt, user_content)
+    proposals = result.get("indicateurs_proposes", [])
+    cleaned = []
+    for p in proposals:
+        if not p.get("intitule"):
+            continue
+        # Verrou de securite : meme si le modele renvoie une cle
+        # interdite, elle est retiree avant toute ecriture.
+        for forbidden in COLONNES_INTERDITES_A_L_IA:
+            p.pop(forbidden, None)
+        p["origine"] = "proposition_ia"
+        cleaned.append(p)
+    return cleaned
 
 
 def build_matrix(indicators_df: pd.DataFrame) -> tuple[pd.DataFrame, list[dict]]:
@@ -56,6 +110,11 @@ def build_matrix(indicators_df: pd.DataFrame) -> tuple[pd.DataFrame, list[dict]]
     for c in missing_cols:
         df[c] = None
     df = df[MATRIX_COLUMNS]
+
+    # origine : "utilisateur" si fourni dans le CSV source, sinon
+    # laisse tel quel (sera positionne a "proposition_ia" plus tard
+    # pour les lignes ajoutees par Claude, jamais ici).
+    df["origine"] = df["origine"].apply(lambda v: "utilisateur" if pd.isna(v) or str(v).strip() == "" else str(v).strip())
 
     # statut_validation : valeur fournie si reconnue, sinon "propose"
     # par defaut (jamais "approuve" invente).
@@ -89,6 +148,7 @@ def write_matrix_excel(df: pd.DataFrame, gaps: list[dict], project_elements: dic
     header_fill = PatternFill(start_color="1F3864", end_color="1F3864", fill_type="solid")
     header_font = Font(color="FFFFFF", bold=True)
     gap_fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+    ia_fill = PatternFill(start_color="FFE4B5", end_color="FFE4B5", fill_type="solid")
 
     for c, h in enumerate(MATRIX_COLUMNS, start=1):
         cell = ws.cell(row=1, column=c, value=h)
@@ -103,6 +163,9 @@ def write_matrix_excel(df: pd.DataFrame, gaps: list[dict], project_elements: dic
         if row_dict["intitule"] in gap_indicators:
             for c in range(1, len(MATRIX_COLUMNS) + 1):
                 ws.cell(row=i, column=c).fill = gap_fill
+        elif row_dict.get("origine") == "proposition_ia":
+            for c in range(1, len(MATRIX_COLUMNS) + 1):
+                ws.cell(row=i, column=c).fill = ia_fill
 
     for c in range(1, len(MATRIX_COLUMNS) + 1):
         ws.column_dimensions[get_column_letter(c)].width = 24
@@ -119,9 +182,10 @@ def write_matrix_excel(df: pd.DataFrame, gaps: list[dict], project_elements: dic
     ws3 = wb.create_sheet("A completer")
     ws3.cell(row=1, column=1, value="AVERTISSEMENT").font = Font(bold=True, color="C00000", size=12)
     ws3.cell(row=2, column=1, value="Aucune cible ou donnee n'a ete inventee. Les elements ci-dessous necessitent un arbitrage ou une donnee de l'utilisateur avant validation de la matrice.")
-    ws3.cell(row=4, column=1, value="Indicateur").font = Font(bold=True)
-    ws3.cell(row=4, column=2, value="Champs manquants").font = Font(bold=True)
-    for i, g in enumerate(gaps, start=5):
+    ws3.cell(row=3, column=1, value="Legende couleurs feuille 'Matrice indicateurs' : rouge = champ(s) obligatoire(s) manquant(s) ; orange = indicateur propose par IA, a valider/rejeter (jamais de cible/valeur_reference inventee).").font = Font(italic=True)
+    ws3.cell(row=5, column=1, value="Indicateur").font = Font(bold=True)
+    ws3.cell(row=5, column=2, value="Champs manquants").font = Font(bold=True)
+    for i, g in enumerate(gaps, start=6):
         ws3.cell(row=i, column=1, value=g["indicateur"])
         ws3.cell(row=i, column=2, value=", ".join(g["champs_manquants"]))
     ws3.column_dimensions["A"].width = 30
@@ -135,6 +199,7 @@ def main() -> int:
     ap.add_argument("--project", required=True, help="JSON produit par project_intake.py")
     ap.add_argument("--indicators", required=True, help="CSV d'indicateurs fournis par l'utilisateur")
     ap.add_argument("--output-dir", default="output")
+    ap.add_argument("--no-ia", action="store_true", help="Desactive la proposition d'indicateurs par IA")
     args = ap.parse_args()
 
     project_path = Path(args.project)
@@ -160,16 +225,39 @@ def main() -> int:
     for w in type_warnings:
         logger.warning(w)
 
+    n_proposed = 0
+    if not args.no_ia:
+        try:
+            proposals = propose_indicators_with_ia(project["elements"], list(matrix_df["intitule"]))
+            n_proposed = len(proposals)
+            if proposals:
+                proposals_df = pd.DataFrame(proposals)
+                for c in MATRIX_COLUMNS:
+                    if c not in proposals_df.columns:
+                        proposals_df[c] = None
+                proposals_df = proposals_df[MATRIX_COLUMNS]
+                proposals_df["statut_validation"] = DEFAULT_STATUT_VALIDATION
+                matrix_df = pd.concat([matrix_df, proposals_df], ignore_index=True)
+                logger.info("%d indicateur(s) supplementaire(s) propose(s) par IA (origine='proposition_ia')", n_proposed)
+        except Exception as exc:
+            from llm_connector import LLMNotConfiguredError
+            if isinstance(exc, LLMNotConfiguredError):
+                logger.info("Proposition d'indicateurs IA desactivee : %s", exc)
+            else:
+                logger.warning("Proposition d'indicateurs IA indisponible (echec appel) : %s", str(exc)[:500])
+
     excel_path = run_dir / "matrice_indicateurs.xlsx"
     write_matrix_excel(matrix_df, gaps, project["elements"], excel_path)
 
-    logger.info("Matrice ecrite : %s (%d indicateur(s), %d lacune(s) signalee(s), %d avertissement(s) de type)",
-                excel_path, len(matrix_df), len(gaps), len(type_warnings))
+    logger.info("Matrice ecrite : %s (%d indicateur(s), %d lacune(s) signalee(s), %d avertissement(s) de type, %d proposition(s) IA)",
+                excel_path, len(matrix_df), len(gaps), len(type_warnings), n_proposed)
     print(f"OK - matrice: {excel_path}")
     if gaps:
         print(f"ATTENTION : {len(gaps)} lacune(s) a arbitrer avant approbation -- voir feuille 'A completer'")
     if type_warnings:
         print(f"ATTENTION : {len(type_warnings)} type(s) d'indicateur non reconnu(s)")
+    if n_proposed:
+        print(f"INFO : {n_proposed} indicateur(s) supplementaire(s) propose(s) par IA -- a valider (lignes orange)")
     return 0
 
 

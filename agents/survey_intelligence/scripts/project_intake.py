@@ -44,14 +44,20 @@ logger = logging.getLogger("survey_intelligence.project_intake")
 
 # Chaque element : liste de patterns regex (section explicite "Label:")
 # ET mots-cles de secours si aucune section explicite n'est trouvee.
+# Chaque element : pattern ancre en DEBUT DE LIGNE (re.MULTILINE),
+# avec deux-points obligatoire -- evite qu'un mot generique comme
+# "region" matche n'importe ou en plein milieu d'une phrase (bug
+# reel trouve : "region" dans "la region de San-Pedro souffre..."
+# etait capture comme zone_geographique a la place du vrai en-tete
+# "Zone geographique :").
 SECTION_PATTERNS = {
-    "contexte_problematique": r"(?:contexte|problematique|probleme)\s*[:\-]?\s*\n?(.+?)(?=\n[A-ZÉÀ].{0,40}[:\-]|\Z)",
-    "objectifs_resultats": r"(?:objectifs?|resultats? attendus?)\s*[:\-]?\s*\n?(.+?)(?=\n[A-ZÉÀ].{0,40}[:\-]|\Z)",
-    "beneficiaires_population": r"(?:beneficiaires?|population cible)\s*[:\-]?\s*\n?(.+?)(?=\n[A-ZÉÀ].{0,40}[:\-]|\Z)",
-    "zone_geographique": r"(?:zone geographique|localisation|region|zone d'intervention)\s*[:\-]?\s*\n?(.+?)(?=\n[A-ZÉÀ].{0,40}[:\-]|\Z)",
-    "activites_duree": r"(?:activites?|duree du projet|calendrier)\s*[:\-]?\s*\n?(.+?)(?=\n[A-ZÉÀ].{0,40}[:\-]|\Z)",
-    "indicateurs_existants": r"(?:indicateurs? (?:deja )?definis?|indicateurs? existants?)\s*[:\-]?\s*\n?(.+?)(?=\n[A-ZÉÀ].{0,40}[:\-]|\Z)",
-    "besoins_collecte_suivi": r"(?:besoins? de collecte|suivi et reporting|collecte et suivi)\s*[:\-]?\s*\n?(.+?)(?=\n[A-ZÉÀ].{0,40}[:\-]|\Z)",
+    "contexte_problematique": r"^\s*(?:contexte|problematique|probleme)\s*[:\-]\s*\n?(.+?)(?=\n[A-ZÉÀ].{0,40}[:\-]|\Z)",
+    "objectifs_resultats": r"^\s*(?:objectifs?|resultats? attendus?)\s*[:\-]\s*\n?(.+?)(?=\n[A-ZÉÀ].{0,40}[:\-]|\Z)",
+    "beneficiaires_population": r"^\s*(?:beneficiaires?|population cible)\s*[:\-]\s*\n?(.+?)(?=\n[A-ZÉÀ].{0,40}[:\-]|\Z)",
+    "zone_geographique": r"^\s*(?:zone geographique|localisation|zone d'intervention)\s*[:\-]\s*\n?(.+?)(?=\n[A-ZÉÀ].{0,40}[:\-]|\Z)",
+    "activites_duree": r"^\s*(?:activites?|duree du projet|calendrier)\s*[:\-]\s*\n?(.+?)(?=\n[A-ZÉÀ].{0,40}[:\-]|\Z)",
+    "indicateurs_existants": r"^\s*(?:indicateurs? (?:deja )?definis?|indicateurs? existants?)\s*[:\-]\s*\n?(.+?)(?=\n[A-ZÉÀ].{0,40}[:\-]|\Z)",
+    "besoins_collecte_suivi": r"^\s*(?:besoins? de collecte|suivi et reporting|collecte et suivi)\s*[:\-]\s*\n?(.+?)(?=\n[A-ZÉÀ].{0,40}[:\-]|\Z)",
 }
 
 REQUIRED_ELEMENTS = list(SECTION_PATTERNS.keys())
@@ -73,7 +79,7 @@ def extract_elements(text: str) -> dict:
     """
     result = {}
     for key, pattern in SECTION_PATTERNS.items():
-        match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
+        match = re.search(pattern, text, re.IGNORECASE | re.DOTALL | re.MULTILINE)
         if match:
             content = match.group(1).strip()
             result[key] = content[:3000] if content else None
