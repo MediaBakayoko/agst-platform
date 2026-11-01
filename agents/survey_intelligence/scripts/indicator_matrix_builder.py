@@ -64,7 +64,8 @@ def propose_indicators_with_ia(project_elements: dict, existing_intitules: list[
     Leve LLMNotConfiguredError si aucune cle API -- l'appelant doit
     alors continuer sans proposition, jamais simuler un succes.
     """
-    from llm_connector import get_claude_connector
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "_shared"))
+    from llm_connector import get_claude_connector  # noqa: E402
 
     connector = get_claude_connector()
     contexte = {k: v for k, v in project_elements.items() if v}

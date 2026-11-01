@@ -99,7 +99,8 @@ def propose_missing_elements_with_ia(text: str, missing_keys: list[str]) -> dict
     l'appelant doit alors continuer sans propositions IA, jamais
     simuler un succes.
     """
-    from llm_connector import get_claude_connector
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "_shared"))
+    from llm_connector import get_claude_connector  # noqa: E402
 
     connector = get_claude_connector()
 

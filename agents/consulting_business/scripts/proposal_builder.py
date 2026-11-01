@@ -8,6 +8,11 @@ Ne mentionne JAMAIS une experience, reference ou qualification absente
 du profil fourni -- si le profil est incomplet, le dit explicitement
 dans le document plutot que d'inventer.
 
+Section methodologique : si ANTHROPIC_API_KEY est configuree, un
+brouillon de methodologie est redige par Claude a partir des objectifs
+et livrables REELS du ToR (jamais generique) -- toujours marque
+"[BROUILLON IA -- A VALIDER]" et jamais presente comme definitif.
+
 Usage:
     python proposal_builder.py \
         --tor-analysis output/tor_test_XXX/tor_analysis.json \
@@ -29,7 +34,44 @@ from docx.shared import Mm, RGBColor
 logger = logging.getLogger("consulting_business.proposal_builder")
 
 
-def build_proposal(tor_analysis: dict, profile: dict, output_path: Path) -> list[str]:
+def draft_methodology_with_ia(tor_sections: dict, tor_propositions: dict) -> dict | None:
+    """Demande a Claude de rediger un brouillon de methodologie a
+    partir des objectifs/livrables REELS du ToR (sections detectees
+    ou proposees a l'etape tor_analyzer.py). Retourne None si aucune
+    cle API n'est configuree ou si l'appel echoue -- l'appelant doit
+    alors afficher le texte [A REDIGER] habituel, jamais simuler un
+    succes.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "_shared"))
+    from llm_connector import get_claude_connector, LLMNotConfiguredError, LLMAPIError
+
+    objectifs = tor_sections.get("objectifs") or (tor_propositions.get("objectifs") or {}).get("texte_propose")
+    livrables = tor_sections.get("livrables") or (tor_propositions.get("livrables") or {}).get("texte_propose")
+    if not objectifs and not livrables:
+        return None
+
+    try:
+        connector = get_claude_connector()
+        system_prompt = (
+            "Tu es un consultant expert en methodologie de mission (geomatique/donnees/suivi-"
+            "evaluation). A partir des objectifs et livrables REELS d'un ToR, redige un "
+            "brouillon d'approche methodologique CONCRET et SPECIFIQUE a cette mission -- "
+            "jamais un texte generique passe-partout. Structure en etapes numerotees courtes.\n\n"
+            "Reponds UNIQUEMENT en JSON valide : "
+            '{"etapes": ["etape 1...", "etape 2...", ...], "duree_estimee_semaines": "estimation textuelle ou null si non deductible"}'
+        )
+        user_content = f"Objectifs :\n{objectifs or 'non precise'}\n\nLivrables :\n{livrables or 'non precise'}"
+        result = connector.generate_json(system_prompt, user_content)
+        return result if result.get("etapes") else None
+    except LLMNotConfiguredError as exc:
+        logger.info("Brouillon methodologie IA desactive : %s", exc)
+        return None
+    except LLMAPIError as exc:
+        logger.warning("Brouillon methodologie IA indisponible (echec appel) : %s", str(exc)[:500])
+        return None
+
+
+def build_proposal(tor_analysis: dict, profile: dict, output_path: Path, no_ia: bool = False) -> list[str]:
     """Construit le document Word. Renvoie la liste des avertissements
     (sections ToR non trouvees, elements de profil absents) a signaler
     a l'utilisateur.
@@ -46,12 +88,13 @@ def build_proposal(tor_analysis: dict, profile: dict, output_path: Path) -> list
 
     doc.add_paragraph(
         "⚠ BROUILLON — document non finalise. A relire et completer avant tout envoi. "
-        "Aucune donnee financiere ou reference n'a ete inventee ; les elements manquants "
-        "sont signales ci-dessous."
+        "Aucune donnee financiere ou reference n'a ete inventee ; les elements marques "
+        "[PROPOSITION IA] ou [BROUILLON IA] doivent etre valides avant usage."
     ).italic = True
 
     doc.add_heading("1. Rappel des termes de reference", level=1)
     sections = tor_analysis.get("sections", {})
+    propositions_ia = tor_analysis.get("propositions_ia", {})
     labels = {
         "objectifs": "Objectifs de la mission",
         "livrables": "Livrables attendus",
@@ -62,8 +105,16 @@ def build_proposal(tor_analysis: dict, profile: dict, output_path: Path) -> list
     for key, label in labels.items():
         doc.add_heading(label, level=2)
         content = sections.get(key)
+        proposition = propositions_ia.get(key)
         if content:
             doc.add_paragraph(content)
+        elif proposition:
+            p = doc.add_paragraph()
+            run = p.add_run(f"[PROPOSITION IA -- CONFIANCE {proposition.get('confiance', 'inconnue').upper()} -- A VALIDER]  ")
+            run.bold = True
+            run.font.color.rgb = RGBColor(0xB8, 0x6A, 0x00)
+            p.add_run(proposition.get("texte_propose", ""))
+            warnings.append(f"Section ToR proposee par IA (a valider) : {label}")
         else:
             doc.add_paragraph(
                 "Non trouvé dans le ToR fourni — à compléter manuellement après relecture du document original."
@@ -100,11 +151,23 @@ def build_proposal(tor_analysis: dict, profile: dict, output_path: Path) -> list
             doc.add_paragraph(f"• {q}", style="List Bullet")
 
     doc.add_heading("3. Approche méthodologique proposée", level=1)
-    doc.add_paragraph(
-        "[À RÉDIGER] — section à compléter manuellement : démarche technique proposée "
-        "en réponse aux objectifs et livrables ci-dessus."
-    ).italic = True
-    warnings.append("Section methodologique non redigee automatiquement -- a completer manuellement")
+    methodology = None if no_ia else draft_methodology_with_ia(sections, propositions_ia)
+    if methodology:
+        p = doc.add_paragraph()
+        run = p.add_run("[BROUILLON IA -- A VALIDER ET ADAPTER]")
+        run.bold = True
+        run.font.color.rgb = RGBColor(0xB8, 0x6A, 0x00)
+        for i, etape in enumerate(methodology.get("etapes", []), start=1):
+            doc.add_paragraph(f"{i}. {etape}")
+        if methodology.get("duree_estimee_semaines"):
+            doc.add_paragraph(f"Durée estimée (brouillon) : {methodology['duree_estimee_semaines']}").italic = True
+        warnings.append("Methodologie redigee par IA -- a valider et adapter avant envoi (jamais a envoyer telle quelle)")
+    else:
+        doc.add_paragraph(
+            "[À RÉDIGER] — section à compléter manuellement : démarche technique proposée "
+            "en réponse aux objectifs et livrables ci-dessus."
+        ).italic = True
+        warnings.append("Section methodologique non redigee automatiquement -- a completer manuellement")
 
     doc.add_heading("4. Budget", level=1)
     doc.add_paragraph(
@@ -122,6 +185,7 @@ def main() -> int:
     ap.add_argument("--tor-analysis", required=True)
     ap.add_argument("--profile", required=True)
     ap.add_argument("--output-dir", default="output")
+    ap.add_argument("--no-ia", action="store_true")
     args = ap.parse_args()
 
     tor_path = Path(args.tor_analysis)
@@ -143,7 +207,7 @@ def main() -> int:
     profile = json.loads(profile_path.read_text(encoding="utf-8"))
 
     output_path = run_dir / "proposition_technique_brouillon.docx"
-    warnings = build_proposal(tor_analysis, profile, output_path)
+    warnings = build_proposal(tor_analysis, profile, output_path, no_ia=args.no_ia)
 
     for w in warnings:
         logger.warning(w)
@@ -151,7 +215,7 @@ def main() -> int:
 
     print(f"OK - proposition: {output_path}")
     if warnings:
-        print(f"ATTENTION : {len(warnings)} element(s) a completer manuellement avant envoi")
+        print(f"ATTENTION : {len(warnings)} element(s) a completer/valider manuellement avant envoi")
     print("RAPPEL : ceci est un brouillon -- aucun envoi automatique, validation humaine requise.")
     return 0
 

@@ -15,7 +15,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
+SHARED_DIR = Path(__file__).resolve().parent.parent.parent / "_shared"
 sys.path.insert(0, str(SCRIPTS_DIR))
+sys.path.insert(0, str(SHARED_DIR))
 
 from llm_connector import (  # noqa: E402
     ClaudeConnector,
