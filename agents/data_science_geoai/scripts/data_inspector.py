@@ -19,6 +19,8 @@ from pathlib import Path
 
 import pandas as pd
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "_shared"))
+
 logger = logging.getLogger("data_science_geoai.data_inspector")
 
 
@@ -75,10 +77,47 @@ def compute_correlations(df: pd.DataFrame) -> dict:
     return corr.to_dict()
 
 
+def interpret_dictionary_with_ia(dictionary: list[dict], correlations: dict, n_lignes: int) -> str | None:
+    """Demande a Claude une synthese en langage clair du dictionnaire
+    de donnees REELLEMENT calcule (completude, outliers IQR,
+    correlations) -- jamais un chiffre invente hors de ce
+    dictionnaire. Retourne None si aucune cle API configuree ou si
+    l'appel echoue.
+    """
+    from llm_connector import get_claude_connector, LLMNotConfiguredError, LLMAPIError
+
+    try:
+        connector = get_claude_connector()
+        system_prompt = (
+            "Tu es un data scientist specialise en donnees geospatiales/agricoles. On te donne "
+            "un dictionnaire de donnees REELLEMENT calcule (completude, statistiques, valeurs "
+            "aberrantes detectees par regle IQR, correlations de Pearson) -- tu ne dois JAMAIS "
+            "inventer un chiffre absent de ces donnees. Redige une synthese en langage clair "
+            "(4-6 phrases) pour un non-statisticien : qualite globale des donnees, variables a "
+            "surveiller (valeurs manquantes, aberrantes), correlations notables et leur sens "
+            "possible -- sans affirmer de causalite a partir d'une simple correlation.\n\n"
+            "Reponds UNIQUEMENT en JSON valide : {\"synthese\": \"...\"}"
+        )
+        user_content = (
+            f"Nombre de lignes : {n_lignes}\n\n"
+            f"Dictionnaire de donnees :\n{json.dumps(dictionary, ensure_ascii=False, indent=2, default=str)}\n\n"
+            f"Correlations Pearson :\n{json.dumps(correlations, ensure_ascii=False, indent=2, default=str)}"
+        )
+        result = connector.generate_json(system_prompt, user_content)
+        return result.get("synthese")
+    except LLMNotConfiguredError as exc:
+        logger.info("Synthese IA desactivee : %s", exc)
+        return None
+    except LLMAPIError as exc:
+        logger.warning("Synthese IA indisponible (echec appel) : %s", str(exc)[:500])
+        return None
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("input_file")
     ap.add_argument("--output-dir", default="output")
+    ap.add_argument("--no-ia", action="store_true")
     args = ap.parse_args()
 
     input_path = Path(args.input_file)
@@ -104,6 +143,7 @@ def main() -> int:
             logger.warning("Variable '%s' : %d valeur(s) aberrante(s) detectee(s) (regle IQR)", entry["variable"], outliers["n_outliers"])
 
     correlations = compute_correlations(df)
+    synthese_ia = None if args.no_ia else interpret_dictionary_with_ia(dictionary, correlations, len(df))
 
     out = {
         "fichier_source": str(input_path),
@@ -112,6 +152,12 @@ def main() -> int:
         "n_colonnes": len(df.columns),
         "dictionnaire_donnees": dictionary,
         "correlations_pearson": correlations,
+        "synthese_ia": synthese_ia,
+        "avertissement_synthese_ia": (
+            "La synthese_ia est une interpretation generee par IA, basee uniquement sur les "
+            "chiffres ci-dessus -- a valider, jamais une source de verite independante."
+            if synthese_ia else None
+        ),
     }
     out_path = run_dir / "data_dictionary.json"
     out_path.write_text(json.dumps(out, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
@@ -119,6 +165,8 @@ def main() -> int:
     n_vars_incompletes = sum(1 for e in dictionary if e["pct_manquant"] > 20)
     logger.info("Termine : %d variable(s) avec >20%% manquant, voir data_dictionary.json", n_vars_incompletes)
     print(f"OK - dictionnaire de donnees: {out_path}")
+    if synthese_ia:
+        print("INFO : synthese IA generee -- voir champ 'synthese_ia' du fichier JSON")
     return 0
 
 

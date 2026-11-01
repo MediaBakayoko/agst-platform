@@ -10,6 +10,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
 from datetime import datetime
@@ -23,6 +24,8 @@ import pandas as pd
 from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "_shared"))
+
 logger = logging.getLogger("meal.dashboard_builder")
 
 STATUS_COLORS = {
@@ -34,7 +37,46 @@ STATUS_COLORS = {
 }
 
 
-def write_dashboard(df: pd.DataFrame, output_path: Path) -> None:
+def propose_recommendations_with_ia(df: pd.DataFrame) -> list[dict] | None:
+    """Propose des recommandations/actions correctives pour les
+    indicateurs REELLEMENT en retard ou tres en retard (statuts
+    calcules par indicator_calculator.py, jamais inventes ici).
+    Retourne None si aucune cle API configuree ou si l'appel echoue --
+    l'utilisateur garde alors le controle total via
+    recommendation_tracker.py (jamais d'ajout automatique au
+    registre, meme avec IA : uniquement une proposition affichee).
+    """
+    from llm_connector import get_claude_connector, LLMNotConfiguredError, LLMAPIError
+
+    en_retard = df[df["statut"].isin(["en_retard", "tres_en_retard"])]
+    if en_retard.empty:
+        return None
+
+    try:
+        connector = get_claude_connector()
+        records = en_retard[["code_indicateur", "periode", "valeur_observee", "cible", "pct_atteinte", "statut"]].to_dict(orient="records")
+        system_prompt = (
+            "Tu es un expert en suivi-evaluation (M&E) de projets. On te donne la liste REELLE "
+            "des indicateurs en retard ou tres en retard (valeurs et cibles deja calculees -- "
+            "tu ne dois JAMAIS inventer un chiffre absent de cette liste). Pour chacun, propose "
+            "un constat court et une recommandation d'action corrective concrete.\n\n"
+            "Reponds UNIQUEMENT en JSON valide :\n"
+            '{"recommandations": [{"code_indicateur": "...", "constat": "...", "recommandation": "..."}]}'
+        )
+        user_content = f"Indicateurs en retard (donnees reelles) :\n{json.dumps(records, ensure_ascii=False, indent=2, default=str)}"
+        result = connector.generate_json(system_prompt, user_content)
+        known_codes = {r["code_indicateur"] for r in records}
+        recs = [r for r in result.get("recommandations", []) if r.get("code_indicateur") in known_codes]
+        return recs or None
+    except LLMNotConfiguredError as exc:
+        logger.info("Propositions de recommandations IA desactivees : %s", exc)
+        return None
+    except LLMAPIError as exc:
+        logger.warning("Propositions de recommandations IA indisponibles (echec appel) : %s", str(exc)[:500])
+        return None
+
+
+def write_dashboard(df: pd.DataFrame, output_path: Path, recommendations: list[dict] | None = None) -> None:
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Tableau de bord"
@@ -70,6 +112,24 @@ def write_dashboard(df: pd.DataFrame, output_path: Path) -> None:
         if statut in STATUS_COLORS:
             ws2.cell(row=i, column=1).fill = PatternFill(start_color=STATUS_COLORS[statut], end_color=STATUS_COLORS[statut], fill_type="solid")
 
+    if recommendations:
+        ws3 = wb.create_sheet("Recommandations IA")
+        ws3.cell(row=1, column=1, value="RECOMMANDATIONS PROPOSEES -- A VALIDER (jamais ajoutees automatiquement au registre)").font = Font(bold=True, color="1F3864", size=12)
+        ws3.cell(row=2, column=1, value="Basees uniquement sur les indicateurs reellement en retard ci-dessus. Utiliser recommendation_tracker.py pour les enregistrer apres validation.").font = Font(italic=True)
+        ws3.cell(row=4, column=1, value="Indicateur").font = Font(bold=True, color="FFFFFF")
+        ws3.cell(row=4, column=1).fill = PatternFill(start_color="1F3864", end_color="1F3864", fill_type="solid")
+        ws3.cell(row=4, column=2, value="Constat").font = Font(bold=True, color="FFFFFF")
+        ws3.cell(row=4, column=2).fill = PatternFill(start_color="1F3864", end_color="1F3864", fill_type="solid")
+        ws3.cell(row=4, column=3, value="Recommandation").font = Font(bold=True, color="FFFFFF")
+        ws3.cell(row=4, column=3).fill = PatternFill(start_color="1F3864", end_color="1F3864", fill_type="solid")
+        for i, r in enumerate(recommendations, start=5):
+            ws3.cell(row=i, column=1, value=r.get("code_indicateur", ""))
+            ws3.cell(row=i, column=2, value=r.get("constat", ""))
+            ws3.cell(row=i, column=3, value=r.get("recommandation", ""))
+        ws3.column_dimensions["A"].width = 22
+        ws3.column_dimensions["B"].width = 50
+        ws3.column_dimensions["C"].width = 50
+
     wb.save(output_path)
 
 
@@ -95,6 +155,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--calculated", required=True)
     ap.add_argument("--output-dir", default="output")
+    ap.add_argument("--no-ia", action="store_true")
     args = ap.parse_args()
 
     calc_path = Path(args.calculated)
@@ -112,8 +173,9 @@ def main() -> int:
     logger.info("Donnees calculees chargees : %d ligne(s)", len(df))
 
     dashboard_path = run_dir / "tableau_de_bord.xlsx"
-    write_dashboard(df, dashboard_path)
-    logger.info("Tableau de bord ecrit : %s", dashboard_path)
+    recommendations = None if args.no_ia else propose_recommendations_with_ia(df)
+    write_dashboard(df, dashboard_path, recommendations=recommendations)
+    logger.info("Tableau de bord ecrit : %s%s", dashboard_path, " (avec recommandations IA)" if recommendations else "")
 
     chart_path = run_dir / "progression.png"
     plot_progression(df, chart_path)
